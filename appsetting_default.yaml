@@ -1,0 +1,52 @@
+appName: allino
+description: AI-first web framework
+version: 0.0.1
+bind: ":8000"
+server:
+  enableKeepAlives: true    
+routing:
+  fallbacks: ["index.html", "200.html"]
+  404error: "/404"
+  error: "/error"
+login:
+  oauth:
+    expire: 3600
+    expire-longterm: 315360000
+    authbearer: true
+    jwt_audience: "access_token"
+  csrf:
+    expire: 3600
+    querykey: "csrf_token"
+    formkey: "csrf_token"
+    jwt_audience: "csrf_token"
+  cookie:
+    name: allino_login
+    expire: 1209600
+    secure: false
+    httponly: true
+    path: "/"
+    jwt_audience: "cookie"
+  guest_cookie:
+    name: allino_guest
+    expire: 1209600
+    secure: false
+    httponly: true
+    path: "/"
+    jwt_audience: "guest"
+redis:
+  reserved_keys:
+    userkey: 'allino:user'
+    loginkey: 'allino:login'
+websocket:
+  origin: "http://localhost:8000"
+  readBufferSize: 1024
+  writeBufferSize: 1024
+plugin:
+  plugin_shutdown_timeout: 10
+  restart_failure_max: 5
+  healthcheck_interval: 5
+  healthcheck_failure_max: 3
+log:
+  errorlog:
+    - to: stdout
+      loglevel: debug

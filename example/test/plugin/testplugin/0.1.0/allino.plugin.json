@@ -1,0 +1,7 @@
+{
+  "name" : "testplugin",
+  "version" : "0.1.0",
+  "entrypoint" : "./testplugin",
+  "args" : [],
+  "paths" : [ "/testplugin/echo" ]
+}
