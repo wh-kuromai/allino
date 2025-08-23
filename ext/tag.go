@@ -132,7 +132,106 @@ func (f *FieldAccess[T]) Set(value T) {
 	if !fv.IsValid() || !fv.CanSet() {
 		return
 	}
-	fv.Set(reflect.ValueOf(value))
+
+	// Handle nil values explicitly
+	val := reflect.ValueOf(value)
+	if !val.IsValid() {
+		fv.Set(reflect.Zero(fv.Type()))
+		return
+	}
+
+	// Ensure assignability: value's dynamic type must be assignable to the field
+	if val.Type().AssignableTo(fv.Type()) {
+		fv.Set(val)
+		return
+	}
+	// Also allow conversion if possible
+	if val.Type().ConvertibleTo(fv.Type()) {
+		fv.Set(val.Convert(fv.Type()))
+		return
+	}
+	// Otherwise, do nothing (or panic/log, depending on policy)
+}
+
+// SetFillSlice builds a slice value for this field and sets it.
+//
+// Behavior:
+//   - The underlying field must be a slice; otherwise this is a no-op.
+//   - For each i in [0,size), a prototype value v of the element type is created and
+//     passed to `fill(i, v)`.
+//   - If the element type is a pointer, v is a new instance of *Elem (allocated via reflect.New(Elem)).
+//   - If the element type is a non-pointer, v is the zero value of Elem.
+//   - If fill returns (vv, true), vv is written into the slice at index i.
+//     Assignable / Convertible values are accepted. If the element type is a pointer
+//     and vv is a non-pointer Elem, a new pointer is allocated and populated.
+//   - Elements where ok==false remain the zero value.
+func (f *FieldAccess[T]) SetFillSlice(size int, fill func(i int, v any) (vv any, ok bool)) {
+	if f == nil {
+		return
+	}
+	fv := f.v
+	if !fv.IsValid() || !fv.CanSet() {
+		return
+	}
+	if size < 0 {
+		size = 0
+	}
+	// Only works on slice fields
+	if fv.Kind() != reflect.Slice {
+		return
+	}
+
+	sliceType := fv.Type()
+	elemType := sliceType.Elem()
+	sliceVal := reflect.MakeSlice(sliceType, size, size)
+
+	for i := 0; i < size; i++ {
+		// Prepare prototype v for filler
+		var v any
+		if elemType.Kind() == reflect.Ptr {
+			v = reflect.New(elemType.Elem()).Interface() // *Elem
+		} else {
+			v = reflect.Zero(elemType).Interface() // Elem (zero)
+		}
+
+		if fill == nil {
+			continue
+		}
+		vv, ok := fill(i, v)
+		if !ok {
+			continue
+		}
+
+		val := reflect.ValueOf(vv)
+		// Direct assignable
+		if val.IsValid() && val.Type().AssignableTo(elemType) {
+			sliceVal.Index(i).Set(val)
+			continue
+		}
+		// Convertible
+		if val.IsValid() && val.Type().ConvertibleTo(elemType) {
+			sliceVal.Index(i).Set(val.Convert(elemType))
+			continue
+		}
+		// If element is a pointer and vv is non-pointer Elem, box it
+		if elemType.Kind() == reflect.Ptr && val.IsValid() {
+			if val.Type().AssignableTo(elemType.Elem()) {
+				p := reflect.New(elemType.Elem())
+				p.Elem().Set(val)
+				sliceVal.Index(i).Set(p)
+				continue
+			}
+			if val.Type().ConvertibleTo(elemType.Elem()) {
+				p := reflect.New(elemType.Elem())
+				p.Elem().Set(val.Convert(elemType.Elem()))
+				sliceVal.Index(i).Set(p)
+				continue
+			}
+		}
+		// Otherwise leave zero value
+	}
+
+	fv.Set(sliceVal)
 }
 
 func (f *FieldAccess[T]) Get() T {
@@ -147,10 +246,144 @@ func (f *FieldAccess[T]) Get() T {
 	return fv.Interface().(T) // 必要なら堅牢版に差し替え
 }
 
+// FieldPlan provides a metadata-only handle to a field registered in a ReflectPlan.
+// It mirrors FieldAccess but does not carry a concrete reflect.Value, so it can be
+// used without a target instance. You can later obtain a FieldAccess via Accessor().
+type FieldPlan[T any] struct {
+	tagidx          int
+	fp              *fieldPlan
+	structTag       reflect.StructTag
+	selectedTagName string
+}
+
+func (f *FieldPlan[T]) Name() string {
+	if f == nil || f.fp == nil || f.tagidx < 0 || f.tagidx >= len(f.fp.tags) {
+		return ""
+	}
+	return f.fp.name
+}
+
+func (f *FieldPlan[T]) Tag() string {
+	if f == nil || f.fp == nil || f.tagidx < 0 || f.tagidx >= len(f.fp.tags) {
+		return ""
+	}
+	return f.fp.tags[f.tagidx]
+}
+
+func (f *FieldPlan[T]) Lookup(tag string) (string, bool) {
+	if f == nil {
+		return "", false
+	}
+	return f.structTag.Lookup(tag)
+}
+
+func (f *FieldPlan[T]) GetLocal() any {
+	if f == nil {
+		return nil
+	}
+	return f.fp.local
+}
+func (f *FieldPlan[T]) SetLocal(v any) {
+	if f != nil {
+		f.fp.local = v
+	}
+}
+
+// Type information helpers
+func (f *FieldPlan[T]) Type() reflect.Type {
+	if f == nil || f.fp == nil {
+		return nil
+	}
+	return f.fp.typ
+}
+func (f *FieldPlan[T]) BaseType() reflect.Type {
+	if f == nil || f.fp == nil {
+		return nil
+	}
+	return f.fp.basetyp
+}
+func (f *FieldPlan[T]) Kind() reflect.Kind {
+	if f == nil || f.fp == nil {
+		return reflect.Invalid
+	}
+	return f.fp.kind
+}
+func (f *FieldPlan[T]) IsPointer() bool {
+	if f == nil || f.fp == nil {
+		return false
+	}
+	return f.fp.ispointer
+}
+func (f *FieldPlan[T]) Index() []int {
+	if f == nil || f.fp == nil {
+		return nil
+	}
+	return slices.Clone(f.fp.index)
+}
+
+// Accessor builds a FieldAccess for a concrete target using the stored index path.
+// Returns (zero, false) if the target is incompatible.
+func (f *FieldPlan[T]) Accessor(target any) (FieldAccess[T], bool) {
+	var zero FieldAccess[T]
+	if f == nil || f.fp == nil || target == nil {
+		return zero, false
+	}
+	root := reflect.ValueOf(target)
+	if root.Kind() == reflect.Ptr {
+		root = root.Elem()
+	}
+	if !root.IsValid() || root.Kind() != reflect.Struct {
+		return zero, false
+	}
+
+	// type check consistency with T
+	tt := reflect.TypeOf((*T)(nil)).Elem()
+	if !typeMatches(tt, f.fp.typ) {
+		return zero, false
+	}
+
+	fv := root.FieldByIndex(f.fp.index)
+	if !fv.IsValid() {
+		return zero, false
+	}
+
+	return FieldAccess[T]{
+		tagidx:          f.tagidx,
+		v:               fv,
+		fp:              f.fp,
+		structTag:       f.fp.sf.Tag,
+		selectedTagName: f.selectedTagName,
+	}, true
+}
+
 var (
 	ErrNotStruct       = errors.New("not struct or struct pointer")
 	ErrNotRegisterdTag = errors.New("not pre-registered tag")
 )
+
+// typeMatches returns true if the field type exactly equals T, or
+// if T is an interface that the field type (or its pointer) implements.
+func typeMatches(tt, fieldType reflect.Type) bool {
+	if tt == nil || fieldType == nil {
+		return false
+	}
+	if fieldType == tt {
+		return true
+	}
+	if tt.Kind() == reflect.Interface {
+		// Direct implementation by the field type
+		if fieldType.Implements(tt) {
+			return true
+		}
+		// If the field is a non-pointer, check pointer receiver methods too
+		if fieldType.Kind() != reflect.Ptr {
+			if reflect.PointerTo(fieldType).Implements(tt) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func ExecutePlan[T any](r *ReflectPlan, tag string, target any, callback func(f FieldAccess[T]) error) error {
 	if r == nil || target == nil || callback == nil || tag == "" {
@@ -192,7 +425,7 @@ func ExecutePlan[T any](r *ReflectPlan, tag string, target any, callback func(f 
 				continue
 			}
 
-			if fp.typ != tt {
+			if !typeMatches(tt, fp.typ) {
 				continue
 			}
 
@@ -211,4 +444,57 @@ func ExecutePlan[T any](r *ReflectPlan, tag string, target any, callback func(f 
 	}
 
 	return walk(r, root)
+}
+
+// EachPlan walks a ReflectPlan without requiring a concrete target instance.
+// It calls the callback for each field that both (a) has the specified `tag` and
+// (b) has the exact type T. Nested non-pointer structs are traversed recursively
+// following the pre-built plan (same behavior as ExecutePlan).
+func EachPlan[T any](r *ReflectPlan, tag string, callback func(f FieldPlan[T]) error) error {
+	if r == nil || callback == nil || tag == "" {
+		return ErrNotStruct
+	}
+
+	tagidx := slices.Index(r.taglist, tag)
+	if tagidx < 0 {
+		return ErrNotRegisterdTag
+	}
+
+	tt := reflect.TypeOf((*T)(nil)).Elem()
+
+	var walk func(rp *ReflectPlan) error
+	walk = func(rp *ReflectPlan) error {
+		if rp == nil {
+			return ErrNotStruct
+		}
+		for _, fp := range rp.fields {
+			// Recurse into nested non-pointer structs captured in the plan
+			if fp.child != nil {
+				if err := walk(fp.child); err != nil {
+					return err
+				}
+			}
+
+			// filter: tag existence
+			if !fp.tagoks[tagidx] {
+				continue
+			}
+			// filter: type match with T
+			if !typeMatches(tt, fp.typ) {
+				continue
+			}
+
+			if err := callback(FieldPlan[T]{
+				tagidx:          tagidx,
+				fp:              fp,
+				structTag:       fp.sf.Tag,
+				selectedTagName: tag,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	return walk(r)
 }

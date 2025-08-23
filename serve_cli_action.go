@@ -12,7 +12,9 @@ func printRoute(s *Server) {
 	// 1. 最大長を計算
 	maxLen := 0
 	for _, r := range allh {
-		line := fmt.Sprintf("%s %s", r.Method, r.Path)
+		line, _ := generateRouteFromOptions(r)
+
+		//line := fmt.Sprintf("%s %s", r.Method, r.Path)
 		if len(line) > maxLen {
 			maxLen = len(line)
 		}
@@ -20,11 +22,16 @@ func printRoute(s *Server) {
 
 	// 2. 出力（パディング）
 	for _, r := range allh {
+		line, form := generateRouteFromOptions(r)
+
 		if r.Summary == "" {
-			fmt.Printf("%s %s\n", r.Method, r.Path)
+			fmt.Printf("%s\n", line)
 		} else {
-			line := fmt.Sprintf("%s %s", r.Method, r.Path)
+			//line := fmt.Sprintf("%s %s", r.Method, r.Path)
 			fmt.Printf("%-*s   # %s\n", maxLen, line, r.Summary)
+		}
+		if form != "" {
+			fmt.Println("  " + form)
 		}
 	}
 }
