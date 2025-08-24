@@ -382,7 +382,9 @@ func (r *Request) getAll(params interface{}, rp *reflectPlan) error {
 	}
 
 	pv := reflect.ValueOf(params)
-	pv = pv.Elem()
+	if pv.Kind() == reflect.Pointer {
+		pv = pv.Elem()
+	}
 	pt := pv.Type()
 
 	for i := 0; i < pt.NumField(); i++ {
@@ -432,16 +434,16 @@ func (r *Request) getAll(params interface{}, rp *reflectPlan) error {
 			continue
 		}
 
-		if rpf.kind == reflect.Struct && rpf.typ != tTime {
-			r.getAll(ptv.Interface(), rpf.child)
-			continue
-		}
-
 		pfval, ok, err := r.getByStructField(rpf, ptv)
 		if err != nil {
 			return err
 		}
 		if !ok {
+			continue
+		}
+
+		if rpf.kind == reflect.Struct && rpf.typ != tTime {
+			r.getAll(ptv.Interface(), rpf.child)
 			continue
 		}
 

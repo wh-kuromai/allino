@@ -68,7 +68,7 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 			//defaults.Set(tDefault)
 		} else {
 			tDefaultPtr := reflect.New(tType).Interface()
-			setDefault(&tDefault)
+			setDefault(tDefaultPtr)
 			//defaults.Set(&tDefault)
 			tDefault = reflect.ValueOf(tDefaultPtr).Elem().Interface().(T)
 		}
@@ -133,6 +133,7 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 				err = r.getAll(param, inputReflectPlan)
 			} else {
 				param = tDefault
+				//fmt.Print(param)
 				err = r.getAll(&param, inputReflectPlan)
 			}
 			//if options.inputType.Kind() == reflect.Ptr {

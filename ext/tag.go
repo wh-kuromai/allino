@@ -93,6 +93,7 @@ type FieldAccess[T any] struct {
 	fp              *fieldPlan    // 事前解析済みメタ
 	structTag       reflect.StructTag
 	selectedTagName string
+	sliceMatch      bool
 }
 
 func (f *FieldAccess[T]) Name() string {
@@ -243,7 +244,62 @@ func (f *FieldAccess[T]) Get() T {
 	if !fv.IsValid() {
 		return zero
 	}
-	return fv.Interface().(T) // 必要なら堅牢版に差し替え
+
+	if !f.sliceMatch {
+		if fv.Kind() == reflect.Ptr && fv.IsNil() {
+			return zero
+		}
+		return fv.Interface().(T)
+	}
+
+	// sliceMatch モード
+	if fv.Kind() != reflect.Slice {
+		return zero
+	}
+
+	// T が slice であることを確認
+	tt := reflect.TypeOf(zero)
+	if tt.Kind() != reflect.Slice {
+		return zero
+	}
+
+	elemT := tt.Elem() // T の要素型（例: *MyStruct）
+	n := fv.Len()
+	out := reflect.MakeSlice(tt, n, n)
+
+	for i := 0; i < n; i++ {
+		elem := fv.Index(i)
+		if !elem.IsValid() {
+			continue
+		}
+		if !elem.CanInterface() {
+			continue
+		}
+
+		val := reflect.ValueOf(elem.Interface())
+
+		// そのまま代入可能
+		if val.Type().AssignableTo(elemT) {
+			out.Index(i).Set(val)
+			continue
+		}
+
+		// 変換可能
+		if val.Type().ConvertibleTo(elemT) {
+			out.Index(i).Set(val.Convert(elemT))
+			continue
+		}
+
+		// ポインタ詰め替え（*ElemT の場合）
+		if elemT.Kind() == reflect.Ptr && val.Type().AssignableTo(elemT.Elem()) {
+			p := reflect.New(elemT.Elem())
+			p.Elem().Set(val)
+			out.Index(i).Set(p)
+			continue
+		}
+	}
+
+	return out.Interface().(T)
 }
 
 // FieldPlan provides a metadata-only handle to a field registered in a ReflectPlan.
@@ -338,7 +394,7 @@ func (f *FieldPlan[T]) Accessor(target any) (FieldAccess[T], bool) {
 
 	// type check consistency with T
 	tt := reflect.TypeOf((*T)(nil)).Elem()
-	if !typeMatches(tt, f.fp.typ) {
+	if !typeMatch(tt, f.fp.typ) {
 		return zero, false
 	}
 
@@ -363,7 +419,7 @@ var (
 
 // typeMatches returns true if the field type exactly equals T, or
 // if T is an interface that the field type (or its pointer) implements.
-func typeMatches(tt, fieldType reflect.Type) bool {
+func typeMatch(tt, fieldType reflect.Type) bool {
 	if tt == nil || fieldType == nil {
 		return false
 	}
@@ -383,6 +439,28 @@ func typeMatches(tt, fieldType reflect.Type) bool {
 		}
 	}
 	return false
+}
+
+// typeSliceMatch returns true if both tt and fieldType are slices, and their
+// element types match according to typeMatches.
+func typeSliceMatch(tt, fieldType reflect.Type) bool {
+	if tt == nil || fieldType == nil {
+		return false
+	}
+	if tt.Kind() != reflect.Slice || fieldType.Kind() != reflect.Slice {
+		return false
+	}
+
+	elemT := tt.Elem()
+	elemF := fieldType.Elem()
+
+	// allow exact element type match
+	if elemT == elemF {
+		return true
+	}
+
+	// allow interface compatibility
+	return typeMatch(elemT, elemF)
 }
 
 func ExecutePlan[T any](r *ReflectPlan, tag string, target any, callback func(f FieldAccess[T]) error) error {
@@ -425,7 +503,8 @@ func ExecutePlan[T any](r *ReflectPlan, tag string, target any, callback func(f 
 				continue
 			}
 
-			if !typeMatches(tt, fp.typ) {
+			sliceMatch := typeSliceMatch(tt, fp.typ)
+			if !sliceMatch && !typeMatch(tt, fp.typ) {
 				continue
 			}
 
@@ -435,6 +514,7 @@ func ExecutePlan[T any](r *ReflectPlan, tag string, target any, callback func(f 
 				fp:              fp,
 				structTag:       fp.sf.Tag, // ★ ここもキャッシュ利用
 				selectedTagName: tag,
+				sliceMatch:      sliceMatch,
 			})
 			if err != nil {
 				return err
@@ -479,8 +559,9 @@ func EachPlan[T any](r *ReflectPlan, tag string, callback func(f FieldPlan[T]) e
 			if !fp.tagoks[tagidx] {
 				continue
 			}
+
 			// filter: type match with T
-			if !typeMatches(tt, fp.typ) {
+			if !typeSliceMatch(tt, fp.typ) && !typeMatch(tt, fp.typ) {
 				continue
 			}
 

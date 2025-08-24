@@ -31,7 +31,7 @@ func printRoute(s *Server) {
 			fmt.Printf("%-*s   # %s\n", maxLen, line, r.Summary)
 		}
 		if form != "" {
-			fmt.Println("  " + form)
+			fmt.Println(form)
 		}
 	}
 }

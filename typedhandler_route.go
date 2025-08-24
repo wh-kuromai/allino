@@ -35,9 +35,9 @@ func generateRouteFromOptions(opt *HandlerOption) (string, string) {
 
 			sample, _ := json.Marshal(n.SampleJSON())
 			if body != "" {
-				body += " "
+				body = "  Request:\n    " + body + "\n"
 			}
-			body += "-> " + string(sample)
+			body += "  Response:\n    " + string(sample)
 		}
 	}
 
@@ -54,8 +54,11 @@ func parseParametersAndFormDataForRoute(t reflect.Type) (
 		field := t.Field(i)
 		var in, name string
 
-		// 優先順位：path > query > form
+		// 優先順位：post > path > query > form
 		switch {
+		case field.Tag.Get("post") != "":
+			in = "post"
+			name = field.Tag.Get("post")
 		case field.Tag.Get("path") != "":
 			in = "path"
 			name = field.Tag.Get("path")
@@ -72,14 +75,26 @@ func parseParametersAndFormDataForRoute(t reflect.Type) (
 		//tschema, _ := jsonino.SchemaFrom(field.Type)
 
 		switch in {
+		case "post":
+			scm, err := jsonino.SchemaFrom(field.Type)
+			if err == nil {
+				b, err := json.Marshal(scm.SampleJSON())
+				if err == nil {
+					formSchema = string(b)
+				}
+			}
 		case "query":
-			params += name + "=" + field.Type.Name()
+			params += "&" + name + "=" + field.Type.Name()
 		case "form":
 			formSchema += name + "=" + field.Type.Name()
 			if field.Type == reflect.TypeOf((*multipart.FileHeader)(nil)) {
 				usesMultipart = true
 			}
 		}
+	}
+
+	if params != "" {
+		params = params[1:]
 	}
 	return
 }
