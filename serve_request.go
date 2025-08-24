@@ -49,6 +49,7 @@ type requestCache struct {
 	input            any
 	sessionid        string
 	guestcookiefound bool
+	ctx              context.Context
 
 	cachedLogin    bool
 	cachedUid      string
@@ -169,7 +170,14 @@ func (r *Request) IsSubRequest() bool {
 }
 
 func (r *Request) Context() context.Context {
-	return r.fiber.UserContext()
+	if r.fiber != nil {
+		return r.fiber.UserContext()
+	}
+
+	if r.cache.ctx == nil {
+		r.cache.ctx = context.Background()
+	}
+	return r.cache.ctx
 }
 
 func (r *Request) jwtdecodedbytag(jwtbody []byte) (map[string]json.RawMessage, error) {

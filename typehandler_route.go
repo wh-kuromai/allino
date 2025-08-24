@@ -27,11 +27,18 @@ func (r *Server) TypedHandle(th TypedHandler) {
 
 	requestFn := func(req *Request) {
 		req.cache.options = th.Options()
-		req.loggerWith = req.Logger().With(
-			zap.String("method", req.fiber.Method()),
-			zap.String("path", opt.Path),
-			zap.String("ip", req.ClientIP()),
-		)
+		if req.fiber != nil {
+			req.loggerWith = req.Logger().With(
+				zap.String("method", req.fiber.Method()),
+				zap.String("path", opt.Path),
+				zap.String("ip", req.ClientIP()),
+			)
+		} else {
+			req.loggerWith = req.Logger().With(
+				zap.String("path", opt.Path),
+				zap.String("ip", req.ClientIP()),
+			)
+		}
 
 		th.HandleRequest(req)
 	}
