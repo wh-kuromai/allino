@@ -272,6 +272,7 @@ func NewTestServer(config *Config) *Server {
 		panic(fmt.Sprintf("NewTestServer error: %s", err))
 	}
 	s.RegisterAllTypedHandler()
+	s.serveInitOnly()
 	return s
 }
 
@@ -554,4 +555,35 @@ func (s *Server) Serve() {
 		fmt.Println("Server gracefully stopped")
 		s.Logger.Info("server shutdown complete")
 	}
+}
+
+func (s *Server) serveInitOnly() {
+	for _, ext := range s.extopts {
+		if ext.OnHandlerInit != nil {
+			opts := s.RegisteredTypedHandlers()
+			for _, opt := range opts {
+				err := ext.OnHandlerInit(s, opt)
+				if err != nil {
+					s.errorPrintln(fmt.Sprintf("OnHandlerInit error for Extension `%s` to path `%s`: ", ext.Info.Name, opt.Path), err)
+				}
+			}
+		}
+	}
+
+	if s.Config.OnServe != nil {
+		err := s.Config.OnServe(s)
+		if err != nil {
+			s.errorPrintln("OnServe error: ", err)
+		}
+	}
+
+	for _, ext := range s.extopts {
+		if ext.OnServe != nil {
+			err := ext.OnServe(s)
+			if err != nil {
+				s.errorPrintln(fmt.Sprintf("OnServe error for Extension `%s`: ", ext.Info.Name), err)
+			}
+		}
+	}
+
 }
