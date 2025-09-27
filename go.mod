@@ -17,8 +17,8 @@ require (
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.10.0
 	github.com/valyala/fasthttp v1.51.0
-	github.com/wh-kuromai/cryptino v0.3.0
-	github.com/wh-kuromai/jsonino v0.2.0
+	github.com/wh-kuromai/cryptino v0.4.0
+	github.com/wh-kuromai/jsonino v0.4.0
 	go.uber.org/zap v1.27.0
 )
 

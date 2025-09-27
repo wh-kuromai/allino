@@ -92,10 +92,10 @@ github.com/valyala/fasthttp v1.51.0 h1:8b30A5JlZ6C7AS81RsWjYMQmrZG6feChmgAolCl1S
 github.com/valyala/fasthttp v1.51.0/go.mod h1:oI2XroL+lI7vdXyYoQk03bXBThfFl2cVdIA3Xl7cH8g=
 github.com/valyala/tcplisten v1.0.0 h1:rBHj/Xf+E1tRGZyWIWwJDiRY0zc1Js+CV5DqwacVSA8=
 github.com/valyala/tcplisten v1.0.0/go.mod h1:T0xQ8SeCZGxckz9qRXTfG43PvQ/mcWh7FwZEA7Ioqkc=
-github.com/wh-kuromai/cryptino v0.0.0-20250621164910-815e80b5f772 h1:7qx3DuCnmlYLGX1F2XW6+D+64uJiykI9JAxXxaqs99c=
-github.com/wh-kuromai/cryptino v0.0.0-20250621164910-815e80b5f772/go.mod h1:DRvHhY8Y6WMFKE7VeC3BU8VyTwEL25JE3yGaOgsEtZs=
-github.com/wh-kuromai/jsonino v0.2.0 h1:GUD0BrmPFBAuaUYXwRlspFD67VE+iQG6QBylk/7VEBA=
-github.com/wh-kuromai/jsonino v0.2.0/go.mod h1:tJ56LtI+tXgV000Cj1/5O8LcuEpiJl7uBAxEArtmQIA=
+github.com/wh-kuromai/cryptino v0.4.0 h1:jUX/tEre3oCVbtwVtl4+wr8YoMpnmES4GS9mLRH6yYQ=
+github.com/wh-kuromai/cryptino v0.4.0/go.mod h1:O/7u7PgHFxQaVnaDV/h2NZvEAKuBortWa7TS6jeWCww=
+github.com/wh-kuromai/jsonino v0.4.0 h1:d87X4UBorA4dMFnfMuYTCz8m/YEUajMYg6qrXvnt3N0=
+github.com/wh-kuromai/jsonino v0.4.0/go.mod h1:m/KLQsrnKC4DyeoxS6OX22FzA92fIdIQF2pfP7DOsOA=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e/go.mod h1:RbqR21r5mrJuqunuUZ/Dhy/avygyECGrLceyNeo4LiM=
 go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
