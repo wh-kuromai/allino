@@ -15,10 +15,10 @@ import (
 
 func TestCLI_Help(t *testing.T) {
 	app := allino.NewCLI(nil)
-	app.SetArgs([]string{})
+	app.Command.SetArgs([]string{})
 
 	output := captureStdout(func() {
-		err := app.Execute()
+		err := app.Command.Execute()
 		require.NoError(t, err)
 	})
 
@@ -27,10 +27,10 @@ func TestCLI_Help(t *testing.T) {
 
 func TestCLI_OpenAPI(t *testing.T) {
 	app := allino.NewCLI(nil)
-	app.SetArgs([]string{"openapi"})
+	app.Command.SetArgs([]string{"openapi"})
 
 	output := captureStdout(func() {
-		err := app.Execute()
+		err := app.Command.Execute()
 		require.NoError(t, err)
 	})
 
@@ -76,8 +76,8 @@ func TestCLI_ServeAndEcho(t *testing.T) {
 		app := allino.NewCLI(&allino.Config{
 			Bind: ":" + port,
 		})
-		app.SetArgs([]string{"serve"})
-		err := app.Execute()
+		app.Command.SetArgs([]string{"serve"})
+		err := app.Command.Execute()
 		assert.NoError(t, err)
 	}()
 

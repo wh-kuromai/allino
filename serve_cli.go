@@ -10,39 +10,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func NewCLI(config *Config) *cobra.Command {
-	var configDir, workDir, bind string
+type CLI struct {
+	Command *cobra.Command
 
-	getServer := func() *Server {
-		if workDir != "" {
-			os.Chdir(workDir)
-		}
+	config    *Config
+	configDir string
+	workDir   string
+	bind      string
+}
 
-		if config == nil {
-			config = &Config{}
-		}
-
-		oninit := config.OnInit
-		config.OnInit = func(s *Server) error {
-			if configDir != "" {
-				config.ConfigDir = configDir
-			}
-			if bind != "" {
-				config.Bind = bind
-			}
-			if oninit != nil {
-				return oninit(s)
-			}
-			return nil
-		}
-
-		s, err := NewServer(config)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return s
-	}
+func NewCLI(config *Config) *CLI {
+	cli := &CLI{config: config}
 
 	isDisabled := func(cmd string) bool {
 		if config != nil {
@@ -60,17 +38,18 @@ func NewCLI(config *Config) *cobra.Command {
 		Short: "allino - AI-first web framework server",
 		//Long:  helptemplate,
 	}
+	cli.Command = rootCmd
 
-	rootCmd.PersistentFlags().StringVarP(&configDir, "config-dir", "c", "", "Set config directory path")
-	rootCmd.PersistentFlags().StringVarP(&workDir, "work-dir", "w", "", "Set working directory path")
-	rootCmd.PersistentFlags().StringVarP(&bind, "bind", "b", "", "Set HTTP server bind address")
+	rootCmd.PersistentFlags().StringVarP(&cli.configDir, "config-dir", "c", "", "Set config directory path")
+	rootCmd.PersistentFlags().StringVarP(&cli.workDir, "work-dir", "w", "", "Set working directory path")
+	rootCmd.PersistentFlags().StringVarP(&cli.bind, "bind", "b", "", "Set HTTP server bind address")
 
 	if !isDisabled("serve") {
 		rootCmd.AddCommand(&cobra.Command{
 			Use:   "serve",
 			Short: "Start the web server",
 			Run: func(cmd *cobra.Command, args []string) {
-				s := getServer()
+				s := cli.InitServer()
 				s.RegisterAllTypedHandler()
 				s.Serve()
 			},
@@ -85,7 +64,7 @@ func NewCLI(config *Config) *cobra.Command {
 			Run: func(cmd *cobra.Command, args []string) {
 				config.ConfigDir = os.Getenv("PROXYVISOR_PLUGIN_CONFIG_DIR")
 				config.Bind = os.Getenv("PROXYVISOR_PLUGIN_ADDRESS")
-				s := getServer()
+				s := cli.InitServer()
 				s.RegisterAllTypedHandler()
 				s.Serve()
 			},
@@ -97,7 +76,7 @@ func NewCLI(config *Config) *cobra.Command {
 			Use:   "openapi",
 			Short: "Generate OpenAPI YAML",
 			Run: func(cmd *cobra.Command, args []string) {
-				s := getServer()
+				s := cli.InitServer()
 				s.RegisterAllTypedHandler()
 				printOpenAPI(s)
 			},
@@ -109,7 +88,7 @@ func NewCLI(config *Config) *cobra.Command {
 			Use:   "route",
 			Short: "Print registered routes",
 			Run: func(cmd *cobra.Command, args []string) {
-				s := getServer()
+				s := cli.InitServer()
 				s.RegisterAllTypedHandler()
 				printRoute(s)
 			},
@@ -121,7 +100,7 @@ func NewCLI(config *Config) *cobra.Command {
 			Use:   "version",
 			Short: "Print version info",
 			Run: func(cmd *cobra.Command, args []string) {
-				s := getServer()
+				s := cli.InitServer()
 				fmt.Println("Allino v" + s.Config.Version)
 			},
 		})
@@ -132,7 +111,7 @@ func NewCLI(config *Config) *cobra.Command {
 			Use:   "keygen",
 			Short: "Generate secrets.config.json file",
 			Run: func(cmd *cobra.Command, args []string) {
-				s := getServer()
+				s := cli.InitServer()
 				cliKeygen(s)
 			},
 		})
@@ -144,7 +123,7 @@ func NewCLI(config *Config) *cobra.Command {
 			Use:   "encrypt",
 			Short: "Encrypt config file",
 			RunE: func(cmd *cobra.Command, args []string) error {
-				s := getServer()
+				s := cli.InitServer()
 				return cliEncrypt(s.envPrefix(), encryptFile)
 			},
 		}
@@ -169,12 +148,44 @@ func NewCLI(config *Config) *cobra.Command {
 		}
 	}
 
-	return rootCmd
+	return cli
+}
+
+func (cli *CLI) InitServer() *Server {
+
+	if cli.workDir != "" {
+		os.Chdir(cli.workDir)
+	}
+
+	if cli.config == nil {
+		cli.config = &Config{}
+	}
+
+	oninit := cli.config.OnInit
+	cli.config.OnInit = func(s *Server) error {
+		if cli.configDir != "" {
+			cli.config.ConfigDir = cli.configDir
+		}
+		if cli.bind != "" {
+			cli.config.Bind = cli.bind
+		}
+		if oninit != nil {
+			return oninit(s)
+		}
+		return nil
+	}
+
+	s, err := NewServer(cli.config)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	return s
 }
 
 func RunCLI(config *Config) {
-	rootCmd := NewCLI(config)
-	if err := rootCmd.Execute(); err != nil {
+	cli := NewCLI(config)
+	if err := cli.Command.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
