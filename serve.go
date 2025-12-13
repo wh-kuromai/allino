@@ -119,6 +119,7 @@ func NewServer(config *Config) (*Server, error) {
 	//}
 
 	s.yamlDecodeOption = NewYAMLCustomDecodeOption()
+	s.yamlDecodeOption = append(s.yamlDecodeOption, yaml.UseJSONUnmarshaler())
 	s.yamlEncodeOption = NewYAMLCustomEncodeOption()
 
 	if !s.Config.System.DisableExtension {
