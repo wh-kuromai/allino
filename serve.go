@@ -91,9 +91,6 @@ type Server struct {
 	Cron      *cron.Cron
 	Validator *validator.Validate
 
-	yamlDecodeOption []yaml.DecodeOption
-	yamlEncodeOption []yaml.EncodeOption
-
 	extensions []extendable
 	extopts    []ExtOption
 
@@ -101,6 +98,9 @@ type Server struct {
 	optionsCache      []*HandlerOption
 	//runAsPlugin bool
 }
+
+var yamlDecodeOption = NewYAMLCustomDecodeOption()
+var yamlEncodeOption = NewYAMLCustomEncodeOption()
 
 //go:embed appsetting_default.yaml
 var settingDefault []byte
@@ -117,10 +117,6 @@ func NewServer(config *Config) (*Server, error) {
 	//	//Router: s.Router,
 	//	server: s,
 	//}
-
-	s.yamlDecodeOption = NewYAMLCustomDecodeOption()
-	s.yamlDecodeOption = append(s.yamlDecodeOption, yaml.UseJSONUnmarshaler())
-	s.yamlEncodeOption = NewYAMLCustomEncodeOption()
 
 	if !s.Config.System.DisableExtension {
 		s.extensions = extensionList
@@ -249,7 +245,7 @@ func NewServer(config *Config) (*Server, error) {
 	for _, th := range s.typedHandlerCache {
 		opt := th.Options()
 		if opt.OnInit != nil {
-			err = opt.OnInit(s)
+			err = opt.OnInit(s, NewRequest(s, nil))
 			if err != nil {
 				return nil, fmt.Errorf("OnInit error for TypedHandler %s: %w", opt.Path, err)
 			}
@@ -328,7 +324,7 @@ func (s *Server) updateBuf(buf []byte, filename string, secure bool) (err error)
 }
 
 func (s *Server) Update(setting []byte, secure bool) error {
-	decoder := yaml.NewDecoder(bytes.NewBuffer(setting), s.yamlDecodeOption...)
+	decoder := yaml.NewDecoder(bytes.NewBuffer(setting), yamlDecodeOption...)
 	err := decoder.Decode(s.Config)
 	if err != nil {
 		return err
@@ -539,7 +535,7 @@ func (s *Server) Serve() {
 	for _, th := range s.typedHandlerCache {
 		opt := th.Options()
 		if opt.OnShutdown != nil {
-			err = opt.OnShutdown(s)
+			err = opt.OnShutdown(s, NewRequest(s, nil))
 			if err != nil {
 				s.errorPrintln(fmt.Sprintf("OnShutdown error for TypedHandler `%s`: ", opt.Path), err)
 			}

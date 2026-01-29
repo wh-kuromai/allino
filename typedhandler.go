@@ -39,7 +39,9 @@ func (s *Server) RegisterAllTypedHandler() {
 	})
 
 	for _, l := range list {
-		s.TypedHandle(l.h)
+		if !l.h.Options().Internal {
+			s.TypedHandle(l.h)
+		}
 	}
 }
 

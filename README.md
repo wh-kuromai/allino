@@ -5,36 +5,36 @@
 
 
 **AI-first web framework for Go**  
-Let your AI generate your apps with best-practice OSS – automatically.
+Let your AI generate your apps using best-practice OSS – automatically.
 
 ---
 
 ## ✨ Features
 
-- **AI-Ready API Definition** : Handler signature, validation, logging, DB, auth are all pre-wired for AI codegen
+- **AI-Ready API Definition**: Handler signatures, validation, logging, database access, and authentication are all pre-wired for AI code generation
 - **[AI-optimized prompt template](#ai-prompt-template-works-well-with-chatgpt)** for instant code generation
 - **Strongly-typed API definition** using Go generics
 - **Automatic input validation** via `go-playground/validator`
 - **Built-in Authentication & Authorization support** with native CSRF protection
 - **Auto-generated OpenAPI docs** for your API
-- **Integrated popular OSS via [Single JSON config](./docs/CONFIG.md)** : `fiber`, `go-redis`, `sql` and more
+- **Popular OSS integrations via a [single JSON config](./docs/CONFIG.md)**: `fiber`, `go-redis`, `sql`, and more
 - **Logging** : Apache Combined access-log, structured error logging with `zap`, log rotation via `lumberjack` and `cron`
 - **Test code generation** with **[this prompt](./docs/TEST.md#ai-prompt-template-for-test-works-well-with-chatgpt)**
 - **Single Page Application (SPA) Support** : Seamlessly serve `react`, `vue`, `svelte` or any static website.
-- **Legacy-friendly** : Drop-in support for existing http.Handler code
-- **Out of box CLI** with beautiful help and route listing
+- **Legacy-friendly**: Drop-in support for existing http.Handler code
+- **Out-of-the-box CLI** with beautiful help and route listing
 ---
 
 ## 🚀 Getting Started
 
-Getting started is simple 
+Getting started takes just a few steps:
 
 ```bash
 $ go get github.com/wh-kuromai/allino@latest
 ```
 
-First, install the package.
-Then, your entrypoint code looks like this:
+First, install the package.  
+Then, your entry point can be as simple as:
 
 ```go
 package main
@@ -51,7 +51,7 @@ func main() {
 
 You might be thinking:
 
-> “But wait, don’t I need to write a giant configuration or manually register all my handlers in that nil?”
+> “But wait — don’t I need a giant config file or to manually register all my handlers?”
 
 Nope — not at all.
 allino automatically registers all handlers declared in imported packages, so you don’t need to do any explicit registration unless you want to.
@@ -83,14 +83,15 @@ var HealthcheckAPITypedHandler = allino.NewTypedAPI("/api/healthcheck",
 	})
 ```
 
-It might look a little unfamiliar at first, but it’s powered by a generic helper function like this:
+It might look a little unfamiliar at first, but it’s built on top of a simple generic helper function:
 
 ```go
 func NewTypedAPI[T, U any, E error](path string, handlefunc func(r *Request, input T) (output U, err E)) TypedHandler
 ```
 
-You can use any types for input/output.
-The framework automatically parses path/query/form parameters into your struct, validates them using validator.v10, and passes the fully-populated struct into your handler.
+You can use any Go types for input and output.
+The framework automatically parses path/query/form parameters into your struct, validates them using go-playground/validator
+, and passes the fully-populated struct into your handler.
 
 The allino.Request includes fiber.Ctx, a zap.Logger, and a redis.Client — everything you need to start building real-world logic right away.
 
@@ -113,7 +114,7 @@ $ go run main.go gendoc routes
 GET /api/healthcheck 
 ```
 
-That’s right — your registered routes are automatically listed with comments.
+That’s right — all registered routes are automatically listed along with their metadata.
 And if you want full documentation? Just run:
 
 ```bash
@@ -122,7 +123,7 @@ $ go run main.go gendoc openapi
 
 See [CLI Output Samples](./docs/CLI.md) for full examples.
 
-You'll be surprised by the accuracy and completeness...
+You may be surprised by the accuracy and completeness.
 Finally, let’s start the server for real:
 
 ```bash
@@ -143,7 +144,7 @@ This means you don't need to explain the whole framework — just paste your API
 ---
 ## 📋 AI Result
 
-AI Generation result with **[this prepared AI Prompt Template](#ai-prompt-template-works-well-with-chatgpt)**.
+Examples of AI-generated results using **[this prepared AI Prompt Template](#ai-prompt-template-works-well-with-chatgpt)**.
 
 | Description | Type | AI | Result | 
 | --- | --- | --- | --- |
@@ -164,11 +165,11 @@ You can paste the following after your API idea, and get working `allino` code i
 //   It enables automatic validation, human-readable handler signatures, and auto-generation of OpenAPI documentation.
 //   By integrating popular OSS such as `fiber`, `redis`, `zap`, and `go-playground/validator`,
 //   it improves compatibility with AI-generated code, making it easier for LLMs to produce reliable implementations.
-//   Use this framework and create API requested by user.
+//   Use this framework to implement the API requested by the user.
 // Input: 
 //   - Fields are populated in order: path parameters → query parameters → form values. 
 //   - Validated using go-playground/Validator. Then passed to the handler function.
-//   - Field type can be string, []byte, int, *multipart.FileHeader or any primitive value.
+//   - Field types can be string, []byte, int, *multipart.FileHeader, or other primitive types.
 //   - If no input is needed, use `any` as the input type to indicate that no data is required.
 // Output:
 //   JSON: 
@@ -235,6 +236,10 @@ type HandlerOption struct {
   ResponseStatusCode int // default is 200. Also used as the response code in the OpenAPI spec.
 	ErrorStatusCode    int // default is 400.
 	HTMLTemplate       string // html/template text
+  Version string // Semantic version like "1.0.0", "0.0.1" if empty
+  Internal bool // if true, this handler will not be registered to server.
+	OnInit     func(s *Server, virtual *Request) error // Init code for this handler, use Request for DB or Logger.
+	OnShutdown func(s *Server, virtual *Request) error // Finalize code for this handler, use Request for DB or Logger.
 }
 ---
 // EXAMPLE
@@ -269,7 +274,7 @@ var SampleAPITypedHandler = allino.NewTypedHandler(
 
 No, you can also use `http.Handler` as it is.
 
-allino lets you incrementally adopt the framework — even legacy `http.Handler` is fully supported.
+allino lets you incrementally adopt the framework — Even legacy `http.Handler` implementations are fully supported.
 
 ```go
 func yourHandler(w http.ResponseWriter, r *http.Request) {
@@ -350,7 +355,7 @@ var HealthcheckAPITypedHandler = allino.NewTypedHandler(
 
 ## 📊 Benchmark
 
-| Software | githuAPI | | gplusAPI | | parseAPI | |
+| Software | githubAPI | | gplusAPI | | parseAPI | |
 |----------|-----------------|--------|-----------------|--------|-----------------|--------|
 | fiber    | 101,496 req/sec | 1.06ms | 112,741 req/sec | 0.96ms | 108,303 req/sec | 0.99ms |
 | allino (fiber +validation,etc)   |  86,738 req/sec | 1.30ms |  94,450 req/sec | 1.22ms |  95,382 req/sec | 1.18ms |

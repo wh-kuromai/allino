@@ -7,6 +7,7 @@ import (
 )
 
 type HandlerOption struct {
+	// HTTP
 	Path               string
 	Priority           int
 	Method             string
@@ -22,19 +23,28 @@ type HandlerOption struct {
 	RedirectStatusCode int
 	NoWrapJSON         bool
 	HTMLTemplate       string
-	AutoAudit          bool
-	AutoAuditMsg       string
 
-	parsedTemplate *template.Template
+	// Logs
+	AutoAudit    bool
+	AutoAuditMsg string
 
-	OnInit     func(s *Server) error
-	OnShutdown func(s *Server) error
+	// Semantics
+	Version     string
+	Internal    bool
+	Summary     string
+	Description string
 
-	Summary        string
-	Description    string
+	// Reflection Hints
 	InputTypeHint  any
 	OutputTypeHint any
 	ErrorTypeHint  any
+
+	// Events
+	OnInit     func(s *Server, r *Request) error
+	OnShutdown func(s *Server, r *Request) error
+
+	// cache
+	parsedTemplate *template.Template
 
 	inputType  reflect.Type
 	outputType reflect.Type

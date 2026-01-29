@@ -1,6 +1,7 @@
 package allino
 
 import (
+	"bytes"
 	"reflect"
 	"sync"
 
@@ -57,7 +58,8 @@ func (c Extension[E, F]) ExtOption() ExtOption {
 	return *c.Option
 }
 func (c Extension[E, F]) Update(setting []byte) error {
-	return yaml.Unmarshal(setting, c.Config)
+	decoder := yaml.NewDecoder(bytes.NewBuffer(setting), yamlDecodeOption...)
+	return decoder.Decode(c.Config)
 }
 
 func NewExtension[E, F any](info *ExtInfo, opt *ExtOption) *Extension[E, F] {

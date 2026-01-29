@@ -144,10 +144,10 @@ func isZeroValue(v reflect.Value) bool {
 	return reflect.DeepEqual(v.Interface(), reflect.Zero(v.Type()).Interface())
 }
 
-func shallowCopyMap[K comparable, V any](src map[K]V) map[K]V {
-	dst := make(map[K]V, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
-}
+//func shallowCopyMap[K comparable, V any](src map[K]V) map[K]V {
+//	dst := make(map[K]V, len(src))
+//	for k, v := range src {
+//		dst[k] = v
+//	}
+//	return dst
+//}

@@ -118,6 +118,8 @@ func NewYAMLCustomDecodeOption() []yaml.DecodeOption {
 		return nil
 	})
 	opts = append(opts, opt)
+
+	opts = append(opts, yaml.UseJSONUnmarshaler())
 	return opts
 }
 
