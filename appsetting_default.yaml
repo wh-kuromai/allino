@@ -53,5 +53,7 @@ log:
 job:
   concurrency: 5
   idle_interval: 300ms
-  lease_seconds: 10s
+  lease_duration: 20s
   requeue_interval: 10s
+  wait_interval: 700ms
+  wait_timeout: 3s

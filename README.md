@@ -251,6 +251,7 @@ type HandlerOption struct {
   //   "cache"      : Caches the result based on input JSON; returns the cached result if available.
   //   "dedupe"     : Ensures only one execution runs concurrently for the same input; returns allino.ErrJobDuplicated if dupulicated. (Requires idempotency)
   //   "once"       : Ensures the handler runs only once per unique input; Subsequent calls return allino.ErrJobDuplicated. (Requires idempotency)
+  //   "memoized"   : Ensures the handler runs only once per unique input; Subsequent calls return cached result. (Requires idempotency)
   //   "async"      : Runs the handler asynchronously. (Internal=true only)
   //   "dispatch"   : Hybrid of Async + Cache. Returns a cached result synchronously if found; otherwise, enqueues as 'async'. (Requires idempotency)
   JobMode string

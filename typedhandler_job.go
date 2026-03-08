@@ -26,8 +26,10 @@ type JobConfig struct {
 	Backend         string        `json:"backend"`
 	IdleInterval    time.Duration `json:"idle_interval"`
 	Concurrency     int           `json:"concurrency"`
-	LeaseSeconds    time.Duration `json:"lease_seconds"`
+	LeaseDuration   time.Duration `json:"lease_duration"`
 	RequeueInterval time.Duration `json:"requeue_interval"`
+	WaitTimeout     time.Duration `json:"wait_timeout"`
+	WaitInterval    time.Duration `json:"wait_interval"`
 }
 
 type JobOption struct {
@@ -90,7 +92,7 @@ var JobExtension = NewExtension[JobConf, JobOpt](
 						s.initTaskWheel()
 
 						// Reaping
-						s.taskwheel.Add(s.Config.JobConfig.LeaseSeconds, func() bool {
+						s.taskwheel.Add(s.Config.JobConfig.LeaseDuration, func() bool {
 							callSQLstrategy.Reaping(s.appctx)
 							return true
 						})
@@ -125,7 +127,7 @@ func strategyWorkerInit(s *callSQLStrategy, sv *Server) {
 	idleit := sv.Config.JobConfig.IdleInterval
 	//leasesec := int(mergeSingle(sv.Config.JobConfig.LeaseSeconds, opt.Job.LeaseSeconds).Seconds())
 
-	leasesec := int(sv.Config.JobConfig.LeaseSeconds.Seconds())
+	leaset := sv.Config.JobConfig.LeaseDuration
 
 	jobchan := make(chan jobTask, sv.Config.JobConfig.Concurrency*2)
 
@@ -136,7 +138,7 @@ func strategyWorkerInit(s *callSQLStrategy, sv *Server) {
 				return
 			default:
 				hs := s.handlers.Diff(s.lockedHandlers)
-				key, handler, meta, injson, err := s.Dequeue(sv.appctx, hs, leasesec)
+				key, handler, meta, injson, err := s.Dequeue(sv.appctx, hs, leaset)
 				if err != nil {
 					if !errors.Is(err, ErrJobNotFound) {
 						sv.Logger.Error("job system error", zap.String("component", "dequeue"), zap.Error(err))
@@ -190,8 +192,8 @@ func strategyWorkerInit(s *callSQLStrategy, sv *Server) {
 						}
 					}
 
-					task := sv.taskwheel.Add(time.Second*time.Duration(leasesec/2), func() bool {
-						err := s.LeaseUpdate(sv.appctx, jobn.key, leasesec)
+					task := sv.taskwheel.Add(time.Duration(leaset/2), func() bool {
+						err := s.LeaseUpdate(sv.appctx, jobn.key, leaset)
 						if err != nil && !sv.Config.Log.Silent {
 							sv.Logger.Info("job system error", zap.String("component", "leaseupdate"), zap.Error(err))
 						}
@@ -226,7 +228,7 @@ func strategyWorkerInit(s *callSQLStrategy, sv *Server) {
 							if err != nil && !r.config.Log.Silent {
 								r.logger.Info("job system error", zap.String("component", "dequeue/requeue"), zap.Error(err))
 							}
-						} else if opt.Job.Cache || opt.Job.Dedupe {
+						} else if opt.Job.Cache {
 
 							var ttl *time.Time
 							if opt.Job.CacheExpire != 0 {
@@ -445,7 +447,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 	} else if dedupeExec {
 		err := opt.Job.callstrategy.Free(r.Context(), key)
 		if err != nil && !r.config.Log.Silent {
-			r.logger.Info("job system error", zap.String("component", "register"), zap.Error(err))
+			r.logger.Info("job system error", zap.String("component", "free"), zap.Error(err))
 		}
 	}
 
@@ -545,13 +547,13 @@ type callStrategy interface {
 	Enqueue(ctx context.Context, handler string, meta JobMeta, injson []byte, delay_sec int, marker string) (enqueud bool, key string, err error)
 
 	// Pull queued job.
-	Dequeue(ctx context.Context, handlers []string, lease_sec int) (key string, handler string, meta JobMeta, injson []byte, err error)
+	Dequeue(ctx context.Context, handlers []string, lease_dur time.Duration) (key string, handler string, meta JobMeta, injson []byte, err error)
 
 	// Search lease expired job and requeue.
 	Reaping(ctx context.Context) (err error)
 
 	// Update lease time for dequeued job.
-	LeaseUpdate(ctx context.Context, key string, lease_sec int) (err error)
+	LeaseUpdate(ctx context.Context, key string, lease_dur time.Duration) (err error)
 
 	// Function is called asynchronously and then store its result.
 	DoneAsync(ctx context.Context, key string, ttl *time.Time, outjson []byte, errjson []byte) (err error)

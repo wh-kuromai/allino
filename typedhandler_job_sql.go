@@ -25,6 +25,9 @@ type callSQLStrategy struct {
 	lastDequeuedId       atomic.Int64
 	dequeueThroughputEMA EMACalculator
 	lockedHandlers       jobset
+
+	waitInterval time.Duration
+	waitTimeout  time.Duration
 }
 
 func newcallSQLStrategy(sv *Server) *callSQLStrategy {
@@ -35,6 +38,8 @@ func newcallSQLStrategy(sv *Server) *callSQLStrategy {
 		handlers:       newJobset(),
 		handlerOptMap:  make(map[string]*HandlerOption),
 		lockedHandlers: newJobset(),
+		waitInterval:   sv.Config.JobConfig.WaitInterval,
+		waitTimeout:    sv.Config.JobConfig.WaitTimeout,
 	}
 
 	s.lastDequeuedId.Store(-1)
@@ -163,7 +168,7 @@ WHERE executions.status='done'
 func (c *callSQLStrategy) Dequeue(
 	ctx context.Context,
 	handlers []string,
-	leaseSec int,
+	leaseDuration time.Duration,
 ) (key string, handler string, meta JobMeta, injson []byte, err error) {
 	if c.issqlite {
 		c.mu.Lock()
@@ -181,7 +186,7 @@ func (c *callSQLStrategy) Dequeue(
 	defer tx.Rollback()
 
 	now := time.Now()
-	leaseUntil := now.Add(time.Duration(leaseSec) * time.Second)
+	leaseUntil := now.Add(leaseDuration)
 
 	// IN (?, ?, ...) を作る
 	placeholders := make([]string, len(handlers))
@@ -289,14 +294,14 @@ WHERE
 	return err
 }
 
-func (c *callSQLStrategy) LeaseUpdate(ctx context.Context, key string, lease_sec int) (err error) {
+func (c *callSQLStrategy) LeaseUpdate(ctx context.Context, key string, lease_dur time.Duration) (err error) {
 	if c.issqlite {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 	}
 
 	now := time.Now()
-	leaset := now.Add(time.Duration(lease_sec) * time.Second)
+	leaset := now.Add(lease_dur)
 	_, err = c.db.ExecContext(ctx, `
 	UPDATE executions
 	SET 
@@ -400,8 +405,10 @@ func (c *callSQLStrategy) Wait(
 ) (ji JobInfo, output []byte, err []byte, syserr error) {
 	var zeroJ JobInfo
 
+	now := time.Now()
+
 	done := make(chan bool, 1)
-	tw.Add(1, func() bool {
+	tw.Add(c.waitInterval, func() bool {
 
 		ji, output, err, syserr = c.Result(ctx, key)
 		if syserr != nil {
@@ -417,6 +424,12 @@ func (c *callSQLStrategy) Wait(
 		if ji.Meta.Status == "leased" &&
 			ji.LeasedUntil != nil &&
 			time.Now().After(*ji.LeasedUntil) {
+			ji, output, err, syserr = zeroJ, nil, nil, ErrJobExpired
+			done <- true
+			return false
+		}
+
+		if time.Now().After(now.Add(c.waitTimeout)) {
 			ji, output, err, syserr = zeroJ, nil, nil, ErrJobExpired
 			done <- true
 			return false
