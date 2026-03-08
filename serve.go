@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"syscall"
 	"time"
@@ -59,6 +58,7 @@ type Config struct {
 	Https        HttpsConfig        `json:"https"`
 	System       SystemConfig       `json:"system"`
 	TrustedProxy TrustedProxyConfig `json:"trustedproxy"`
+	JobConfig    JobConfig          `json:"job"`
 
 	Debug            bool      `json:"debug"`
 	DisabledCommands []string  `json:"-"`
@@ -94,10 +94,19 @@ type Server struct {
 	extensions []extendable
 	extopts    []ExtOption
 
-	typedHandlerCache []TypedHandler
-	optionsCache      []*HandlerOption
+	typedHandlerCache    []TypedHandler
+	internalHandlerCache []TypedHandler
+	optionsCache         []*HandlerOption
+
+	appctx      context.Context
+	appcancel   context.CancelFunc
+	forcectx    context.Context
+	forcecancel context.CancelFunc
+	taskwheel   *twWheel
 	//runAsPlugin bool
 }
+
+var callSQLstrategy *callSQLStrategy
 
 var yamlDecodeOption = NewYAMLCustomDecodeOption()
 var yamlEncodeOption = NewYAMLCustomEncodeOption()
@@ -112,6 +121,15 @@ func NewServer(config *Config) (*Server, error) {
 		Cron:      cron.New(),
 		Validator: validator.New(),
 	}
+
+	ctxb := context.Background()
+	appctx, appcancel := context.WithCancel(ctxb)
+	s.appctx = appctx
+	s.appcancel = appcancel
+
+	forcectx, forcecancel := context.WithCancel(ctxb)
+	s.forcectx = forcectx
+	s.forcecancel = forcecancel
 
 	//s.TypedRouter = &TypedRouter{
 	//	//Router: s.Router,
@@ -235,9 +253,9 @@ func NewServer(config *Config) (*Server, error) {
 
 	for _, ext := range s.extopts {
 		if ext.OnInit != nil {
-			err = ext.OnInit(s)
+			err = ext.OnInit(s, NewRequest(s, nil))
 			if err != nil {
-				return nil, fmt.Errorf("OnInit error for Extension %s: %w", ext.Info.Name, err)
+				return nil, fmt.Errorf("OnInit error for Extension %s: %w", ext.Name, err)
 			}
 		}
 	}
@@ -261,6 +279,13 @@ func (s *Server) filePrefix() string {
 
 func (s *Server) envPrefix() string {
 	return strings.ToUpper(s.Config.Prefix)
+}
+
+func (s *Server) initTaskWheel() {
+	if s.taskwheel == nil {
+		s.taskwheel = newTWWheel(32)
+		go s.taskwheel.Run(s.appctx)
+	}
 }
 
 func NewTestServer(config *Config) *Server {
@@ -355,28 +380,16 @@ func (s *Server) generateKeyIfNotExist() error {
 	return nil
 }
 
-func isReallyNil(value any) bool {
-	if value == nil {
-		return true
-	}
-
-	// reflect.ValueOf(value) が nil に対応しているかを確認
-	v := reflect.ValueOf(value)
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface,
-		reflect.Map, reflect.Pointer, reflect.Slice:
-		return v.IsNil()
-	default:
-		return false
-	}
-}
-
 func (s *Server) errorPrintln(msg string, err error) {
 	if s.Config.OnError != nil {
 		s.Config.OnError(msg, err)
 	} else {
 		fmt.Println(msg, err)
 	}
+}
+
+func (s *Server) Quit() {
+	s.appcancel()
 }
 
 func (s *Server) Serve() {
@@ -464,9 +477,9 @@ func (s *Server) Serve() {
 		if ext.OnHandlerInit != nil {
 			opts := s.RegisteredTypedHandlers()
 			for _, opt := range opts {
-				err = ext.OnHandlerInit(s, opt)
+				err = ext.OnHandlerInit(s, NewRequest(s, nil), opt)
 				if err != nil {
-					s.errorPrintln(fmt.Sprintf("OnHandlerInit error for Extension `%s` to path `%s`: ", ext.Info.Name, opt.Path), err)
+					s.errorPrintln(fmt.Sprintf("OnHandlerInit error for Extension `%s` to path `%s`: ", ext.Name, opt.Path), err)
 				}
 			}
 		}
@@ -481,9 +494,9 @@ func (s *Server) Serve() {
 
 	for _, ext := range s.extopts {
 		if ext.OnServe != nil {
-			err = ext.OnServe(s)
+			err = ext.OnServe(s, NewRequest(s, nil))
 			if err != nil {
-				s.errorPrintln(fmt.Sprintf("OnServe error for Extension `%s`: ", ext.Info.Name), err)
+				s.errorPrintln(fmt.Sprintf("OnServe error for Extension `%s`: ", ext.Name), err)
 			}
 		}
 	}
@@ -491,6 +504,10 @@ func (s *Server) Serve() {
 	// Serve
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-quit
+		s.appcancel()
+	}()
 
 	go func() {
 		err = s.Fiber.Listener(listener)
@@ -499,7 +516,7 @@ func (s *Server) Serve() {
 		}
 	}()
 
-	<-quit
+	<-s.appctx.Done()
 
 	if !s.Config.Log.Silent {
 		fmt.Println("Shutting down server...")
@@ -512,24 +529,20 @@ func (s *Server) Serve() {
 
 	go func() {
 		<-forceQuit // 2回目のCtrl+Cで強制終了
-		fmt.Println("Force quitting...")
-		os.Exit(1)
+
+		fmt.Println("Force quitting in 3sec...")
+		s.forcecancel()
+
+		time.AfterFunc(3*time.Second, func() {
+			os.Exit(1)
+		})
 	}()
 
-	if s.Config.OnShutdown != nil {
-		err := s.Config.OnShutdown(s)
-		if err != nil {
-			s.errorPrintln("OnShutdown error: ", err)
-		}
-	}
-
-	for _, ext := range s.extopts {
-		if ext.OnShutdown != nil {
-			err = ext.OnShutdown(s)
-			if err != nil {
-				s.errorPrintln(fmt.Sprintf("OnShutdown error for Extension `%s`: ", ext.Info.Name), err)
-			}
-		}
+	//ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	//defer cancel()
+	s.appcancel()
+	if err := s.Fiber.ShutdownWithContext(s.forcectx); err != nil {
+		s.errorPrintln("Shutdown error: ", err)
 	}
 
 	for _, th := range s.typedHandlerCache {
@@ -542,10 +555,20 @@ func (s *Server) Serve() {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := s.Fiber.ShutdownWithContext(ctx); err != nil {
-		s.errorPrintln("Shutdown error: ", err)
+	for _, ext := range s.extopts {
+		if ext.OnShutdown != nil {
+			err = ext.OnShutdown(s, NewRequest(s, nil))
+			if err != nil {
+				s.errorPrintln(fmt.Sprintf("OnShutdown error for Extension `%s`: ", ext.Name), err)
+			}
+		}
+	}
+
+	if s.Config.OnShutdown != nil {
+		err := s.Config.OnShutdown(s)
+		if err != nil {
+			s.errorPrintln("OnShutdown error: ", err)
+		}
 	}
 
 	if !s.Config.Log.Silent {
@@ -559,9 +582,17 @@ func (s *Server) serveInitOnly() {
 		if ext.OnHandlerInit != nil {
 			opts := s.RegisteredTypedHandlers()
 			for _, opt := range opts {
-				err := ext.OnHandlerInit(s, opt)
+				err := ext.OnHandlerInit(s, NewRequest(s, nil), opt)
 				if err != nil {
-					s.errorPrintln(fmt.Sprintf("OnHandlerInit error for Extension `%s` to path `%s`: ", ext.Info.Name, opt.Path), err)
+					s.errorPrintln(fmt.Sprintf("OnHandlerInit error for Extension `%s` to path `%s`: ", ext.Name, opt.Path), err)
+				}
+			}
+
+			for _, h := range s.internalHandlerCache {
+				opt := h.Options()
+				err := ext.OnHandlerInit(s, NewRequest(s, nil), opt)
+				if err != nil {
+					s.errorPrintln(fmt.Sprintf("OnHandlerInit error for Extension `%s` to path `%s`: ", ext.Name, opt.Path), err)
 				}
 			}
 		}
@@ -576,9 +607,9 @@ func (s *Server) serveInitOnly() {
 
 	for _, ext := range s.extopts {
 		if ext.OnServe != nil {
-			err := ext.OnServe(s)
+			err := ext.OnServe(s, NewRequest(s, nil))
 			if err != nil {
-				s.errorPrintln(fmt.Sprintf("OnServe error for Extension `%s`: ", ext.Info.Name), err)
+				s.errorPrintln(fmt.Sprintf("OnServe error for Extension `%s`: ", ext.Name), err)
 			}
 		}
 	}

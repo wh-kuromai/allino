@@ -167,6 +167,7 @@ func (s *LogConfig) loadErrLogConfig(c LogOutputConfig, cn *cron.Cron, errfn fun
 	var encoderCfg zapcore.EncoderConfig
 	if c.EncoderConfig == nil {
 		encoderCfg = zap.NewProductionEncoderConfig()
+		encoderCfg.EncodeTime = zapcore.ISO8601TimeEncoder
 	} else {
 		encoderCfg = *c.EncoderConfig
 	}

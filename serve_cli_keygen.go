@@ -58,7 +58,7 @@ func cliEncrypt(envprefix, filepath string) error {
 
 	fmt.Printf("`%s` successfully generated.\n", filepath)
 	fmt.Println("")
-	fmt.Printf("  To use this encrypted config file, be sure to set " + envprefix + "_SECRET environment variable")
+	fmt.Printf("  To use this encrypted config file, be sure to set %s_SECRET environment variable", envprefix)
 	fmt.Printf("  and place `secrets.config.enc` in your config directory.")
 
 	return os.WriteFile(filepath, encbuf, 0600)

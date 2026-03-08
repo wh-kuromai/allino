@@ -50,3 +50,8 @@ log:
   errorlog:
     - to: stdout
       loglevel: debug
+job:
+  concurrency: 5
+  idle_interval: 300ms
+  lease_seconds: 10s
+  requeue_interval: 10s

@@ -11,13 +11,18 @@ import (
 
 var extensionList []extendable
 
+type ExtInfo struct {
+	Name string
+}
+
 type ExtOption struct {
-	Info            *ExtInfo
-	OnInit          func(s *Server) error
-	OnHandlerInit   func(s *Server, opt *HandlerOption) error
-	OnServe         func(s *Server) error
-	OnShutdown      func(s *Server) error
-	RequestHandler  func(r *Request, opt *HandlerOption, input any) error
+	ExtInfo
+
+	OnInit          func(s *Server, virtual *Request) error
+	OnHandlerInit   func(s *Server, virtual *Request, opt *HandlerOption) error
+	OnServe         func(s *Server, virtual *Request) error
+	OnShutdown      func(s *Server, virtual *Request) error
+	RequestHandler  func(r *Request, opt *HandlerOption, input any) (consumed bool, err error)
 	ResponseHandler func(r *Request, opt *HandlerOption, output any) (consumed bool)
 	ErrorHandler    func(r *Request, opt *HandlerOption, err error) (consumed bool)
 	CLICommands     []*cobra.Command
@@ -28,12 +33,7 @@ type extendable interface {
 	Update(setting []byte) error
 }
 
-type ExtInfo struct {
-	Name string
-}
-
 type Extension[E, F any] struct {
-	Info   *ExtInfo
 	Option *ExtOption
 	Config *E
 }
@@ -62,18 +62,13 @@ func (c Extension[E, F]) Update(setting []byte) error {
 	return decoder.Decode(c.Config)
 }
 
-func NewExtension[E, F any](info *ExtInfo, opt *ExtOption) *Extension[E, F] {
+func NewExtension[E, F any](name string, opt *ExtOption) *Extension[E, F] {
 	var config E
 	if opt == nil {
 		opt = &ExtOption{}
 	}
-	if info == nil {
-		info = &ExtInfo{
-			Name: "unknown",
-		}
-	}
+	opt.ExtInfo.Name = name
 	ce := &Extension[E, F]{
-		Info:   info,
 		Config: &config,
 		Option: opt,
 	}

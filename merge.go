@@ -151,3 +151,13 @@ func isZeroValue(v reflect.Value) bool {
 //	}
 //	return dst
 //}
+
+func mergeSingle[T comparable](args ...T) T {
+	var zero T
+	for i := len(args) - 1; i >= 0; i-- {
+		if args[i] != zero {
+			return args[i]
+		}
+	}
+	return zero
+}

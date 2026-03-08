@@ -11,11 +11,3 @@ type APIError[T error] struct {
 func (e *APIError[T]) Error() string {
 	return e.Err.Error()
 }
-
-type Error struct {
-	Msg string `json:"msg"`
-}
-
-func (e Error) Error() string {
-	return e.Msg
-}

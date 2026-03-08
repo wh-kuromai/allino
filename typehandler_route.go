@@ -26,7 +26,7 @@ func (r *Server) TypedHandle(th TypedHandler) {
 	}
 
 	requestFn := func(req *Request) {
-		req.cache.options = th.Options()
+		//req.cache.options = th.Options()
 		if req.fiber != nil {
 			req.loggerWith = req.Logger().With(
 				zap.String("method", req.fiber.Method()),

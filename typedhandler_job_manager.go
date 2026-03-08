@@ -1,0 +1,268 @@
+package allino
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	JOB_ABORT_REQUEUE    = "requeue"
+	JOB_ABORT_REQUEUE_AT = "requeue_at"
+	JOB_ABORT            = "abort"
+)
+
+func (r *Request) MarkRequeue() {
+	r.memo.jobabortctrl = JOB_ABORT_REQUEUE
+}
+
+func (r *Request) MarkRequeueAt(waitsec int) {
+	r.memo.jobabortctrl = JOB_ABORT_REQUEUE_AT
+	r.memo.jobrequeuewait = waitsec
+}
+
+func (r *Request) MarkAbort() {
+	r.memo.jobabortctrl = JOB_ABORT
+}
+
+type JobInfo struct {
+	JobID       string     `json:"jobid"`
+	Handler     string     `json:"handler"`
+	Meta        JobMeta    `json:"meta"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	LeasedUntil *time.Time `json:"leased_until,omitempty"`
+	RetryCount  *int       `json:"retry_count,omitempty"`
+}
+
+type JobMeta struct {
+	Version  string
+	Status   string `json:"status"` // queued / leased / done / error
+	ParentID string
+	RootID   string
+	TTL      *time.Time
+	Priority int
+}
+
+type jobid struct {
+	Version string
+	Backend string
+	Handler string
+	ID      string
+}
+
+const (
+	jobIDPrefix  = "job"
+	jobIDVersion = "v1"
+	jobIDSep     = ":"
+)
+
+func requeueDelay(r *Request) int {
+	switch r.memo.jobabortctrl {
+	case JOB_ABORT_REQUEUE:
+		return int(r.Config().JobConfig.RequeueInterval.Seconds())
+	case JOB_ABORT_REQUEUE_AT:
+		return r.memo.jobrequeuewait
+	}
+	return int(r.Config().JobConfig.RequeueInterval.Seconds())
+}
+
+func handlerVersion(opt *HandlerOption) string {
+	v := opt.Version
+	if opt.Version == "" {
+		v = "0.0.1"
+	}
+	return v
+}
+
+func encodeHandlerName(opt *HandlerOption) string {
+	return opt.Name + "@" + handlerVersion(opt)
+}
+
+func encodeJobKey(handler string, injson []byte) string {
+	h := sha256.New()
+	h.Write([]byte(handler))
+	h.Write(injson)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func encodeJobID(backend, handler string, injson []byte, marker string) string {
+	if backend == "" {
+		backend = "default"
+	}
+	if marker != "" {
+		marker = "." + marker
+	}
+	return strings.Join([]string{
+		jobIDPrefix,
+		jobIDVersion + marker,
+		backend,
+		handler,
+		encodeJobKey(handler, injson),
+	}, jobIDSep)
+}
+
+func decodeJobID(s string) (*jobid, error) {
+	parts := strings.Split(s, jobIDSep)
+	if len(parts) != 5 {
+		return nil, errors.New("invalid jobid format")
+	}
+
+	if parts[0] != jobIDPrefix {
+		return nil, errors.New("invalid jobid prefix")
+	}
+	if !strings.HasPrefix(parts[1], jobIDVersion) {
+		return nil, errors.New("unsupported jobid version")
+	}
+
+	return &jobid{
+		Version: parts[1],
+		Backend: parts[2],
+		Handler: parts[3],
+		ID:      parts[4],
+	}, nil
+}
+
+var ErrDequeueFailed = NewError("job dequeue failed")
+
+var FatalInvalidCacheError = NewError("fatal: invalid cache error")
+var FatalBackendError = NewError("fatal: backend error")
+
+var ErrJobDuplicated = NewError("job already executed")
+
+var ErrJobNotFound = NewError("job not found")
+var ErrJobExpired = NewError("job has beed expired")
+
+var ErrJobHandlerMismatch = NewError("job does not belong to this handler")
+var ErrJobResultEncodeFailed = NewError("failed to encode job result")
+var ErrJobResultDecodeFailed = NewError("failed to decode job result")
+var ErrJobErrorEncodeFailed = NewError("failed to encode job error")
+var ErrJobErrorDecodeFailed = NewError("failed to decode job error")
+var ErrJobInputEncodeFailed = NewError("failed to encode job input")
+var ErrJobInputDecodeFailed = NewError("failed to decode job input")
+
+type JobAcceptedError struct {
+	Status int    `json:"-"`
+	JobID  string `json:"jobid,omitempty"`
+	Msg    string `json:"msg,omitempty"`
+}
+
+func (e JobAcceptedError) StatusCode() int {
+	return e.Status
+}
+
+func (e JobAcceptedError) Error() string {
+	return e.Msg
+}
+
+type JobNotFinishedError struct {
+	JobID string `json:"jobid,omitempty"`
+	Msg   string `json:"msg,omitempty"`
+}
+
+func (e JobNotFinishedError) Error() string {
+	return e.Msg
+}
+
+func NewJobNotFinishedError(key string) *JobNotFinishedError {
+	return &JobNotFinishedError{
+		JobID: key,
+		Msg:   "job not finished yet",
+	}
+}
+
+func unmarshalOutputSet[U any, E error](version JobInfo, outJSON []byte, errJSON []byte, err error) (ver JobInfo, output U, erra error, errb error) {
+	var zeroU U
+	if err != nil {
+		return version, zeroU, nil, err
+	}
+
+	var innererr error
+	// output
+	if outJSON != nil {
+		output = NewRefOf[U](func(a any) {
+			innererr = json.Unmarshal(outJSON, a)
+		})
+		if innererr != nil {
+			return version, zeroU, nil, ErrJobResultDecodeFailed.With(innererr)
+		}
+
+		return version, output, nil, nil
+	}
+
+	// error
+	if errJSON != nil {
+		err = NewRefOf[E](func(a any) {
+			innererr = json.Unmarshal(errJSON, a)
+		})
+		if innererr != nil {
+			return version, zeroU, nil, ErrJobErrorDecodeFailed.With(innererr)
+		}
+
+		return version, zeroU, err, nil
+	}
+
+	return version, zeroU, nil, ErrJobErrorDecodeFailed
+}
+
+func marshalOutputSet[U any, E error](output U, err error) (outJSON []byte, errJSON []byte, syserr error) {
+	var errb error
+	if !isReallyNil(err) {
+		errJSON, errb = json.Marshal(normalizeError(err))
+		if errb != nil {
+			return nil, nil, ErrJobResultEncodeFailed.With(errb)
+		}
+		return nil, errJSON, nil
+	}
+
+	outJSON, errb = json.Marshal(any(output))
+	if errb != nil {
+		return nil, nil, ErrJobErrorEncodeFailed.With(errb)
+	}
+
+	return outJSON, nil, nil
+}
+
+func minorOrAboveDiff(a, b string) bool {
+	ma, mi, err := parseMajorMinor(a)
+	if err != nil {
+		return false
+	}
+	mb, mj, err := parseMajorMinor(b)
+	if err != nil {
+		return false
+	}
+
+	return ma != mb || mi != mj
+}
+
+func parseMajorMinor(v string) (major int, minor int, err error) {
+	parts := strings.Split(v, ".")
+	if len(parts) < 2 {
+		return 0, 0, fmt.Errorf("invalid semver: %s", v)
+	}
+
+	major, err = strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	minor, err = strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return
+}
+
+func normalizeError(err error) any {
+	b, _ := json.Marshal(err)
+	if string(b) == "{}" || string(b) == "" {
+		return NewError(err.Error())
+	}
+	return err
+}

@@ -188,9 +188,9 @@ You can paste the following after your API idea, and get working `allino` code i
 //     - If returning error, it redirects to a default error page.
 //     - If returning RedirectError, sends err.StatusCode and redirects to err.Location.
 package allino //github.com/wh-kuromai/allino
-func NewTypedHandler[T, U any, E error](options HandlerOption, handlefunc func(r *Request, input T) (output U, err E)) TypedHandler
-func NewTypedAPI[T, U any, E error](path string, handlefunc func(r *Request, input T) (output U, err E)) TypedHandler // NewTypedHandler with options.ContentType = application/json
-func NewTypedUI[T, U any, E error](path string, handlefunc func(r *Request, input T) (output U, err E)) TypedHandler // NewTypedHandler with options.ContentType = text/html
+func NewTypedHandler[T, U any, E error](options HandlerOption, handlefunc func(r *Request, input T) (output U, err E)) *GenericTypedHandler[T, U, E]
+func NewTypedAPI[T, U any, E error](path string, handlefunc func(r *Request, input T) (output U, err E)) *GenericTypedHandler[T, U, E] // NewTypedHandler with options.ContentType = application/json
+func NewTypedUI[T, U any, E error](path string, handlefunc func(r *Request, input T) (output U, err E)) *GenericTypedHandler[T, U, E] // NewTypedHandler with options.ContentType = text/html
 type Request struct {}
 func (r *Request) Fiber() *fiber.Ctx
 func (r *Request) Logger() *zap.Logger // use this for logging, no need to check nil.
@@ -236,19 +236,46 @@ type HandlerOption struct {
   ResponseStatusCode int // default is 200. Also used as the response code in the OpenAPI spec.
 	ErrorStatusCode    int // default is 400.
 	HTMLTemplate       string // html/template text
-  Version string // Semantic version like "1.0.0", "0.0.1" if empty
-  Internal bool // if true, this handler will not be registered to server.
 	OnInit     func(s *Server, virtual *Request) error // Init code for this handler, use Request for DB or Logger.
 	OnShutdown func(s *Server, virtual *Request) error // Finalize code for this handler, use Request for DB or Logger.
+  
+  Internal bool // If true, this handler is not exposed as an HTTP endpoint.
+  Name    string // Logical name of this handler. Required when using Job mode.
+  Version string // Semantic version of the handler (e.g. "1.0.0"). Optional.
+
+  // JobMode defines the execution behavior of this handler.
+  // Note: Certain modes require the handler to be idempotent. Allino caches/stores
+  // results using a key: Name + Version + hash(input).
+  // 
+  //   "" (Default) : Standard synchronous execution.
+  //   "cache"      : Caches the result based on input JSON; returns the cached result if available.
+  //   "dedupe"     : Ensures only one execution runs concurrently for the same input; returns allino.ErrJobDuplicated if dupulicated. (Requires idempotency)
+  //   "once"       : Ensures the handler runs only once per unique input; Subsequent calls return allino.ErrJobDuplicated. (Requires idempotency)
+  //   "async"      : Runs the handler asynchronously. (Internal=true only)
+  //   "dispatch"   : Hybrid of Async + Cache. Returns a cached result synchronously if found; otherwise, enqueues as 'async'. (Requires idempotency)
+  JobMode string
+  Job JobOption
 }
----
+type JobOption struct {
+	Priority int // optional. Priority of the handler's jobs. Higher values indicate higher priority.
+  CacheExpire time.Duration // optional. Cache expiration duration. Persistent if 0 (default).
+  Interval time.Duration // optional. Approximate interval between executions (used in async/dispatch mode).
+}
+// Call executes the handler.
+// This can be used inside another handler or from application code.
+func (rw *GenericTypedHandler[T, U, E]) Call(r *Request, input T) (output U, err error)
+
+func (r *Request) MarkAbort() // aborts the current execution (prevent caching or storing result/error)
+func (r *Request) MarkRequeue() // aborts the execution, and schedules a retry with the same input after a short delay.
+func (r *Request) MarkRequeueAt(waitsec int) // aborts the execution, and schedules a retry with the same input after the specified seconds.
+ 
 // EXAMPLE
 import (
 	"github.com/wh-kuromai/allino"
 )
 type SampleAPIInput struct {
 	Echo string `query:"echo" validate:"required"` // Required query parameter (validated by go-playground/validator)
-	Uid  string `path:"uid"`   // Supported parameter tag: path:"path", query:"key", form:"key", jwt:"key" (populated only from a successfully verified JWT Claims), cookie:"name", header:"name"
+	Uid  string `path:"uid"` // Supported parameter tag: path:"path", query:"key", form:"key", jwt:"key" (populated only from a successfully verified JWT Claims), cookie:"name", header:"name"
   Version string `query:"ver" default:"v1"`   // Default values (applied before binding; empty input overwrites)
   // Body SampleAPIInputJSONBody `post:"json"` // Automatically binds JSON body to this field. (json.Unmarshal(body, &param.Body))
 }

@@ -26,7 +26,7 @@ var AuthCSRFTypedHandler = allino.NewTypedHandler(
 	func(r *allino.Request, param *AuthCSRFInput) (*AuthCSRFOutput, error) {
 		uid, _, writable, err := r.User()
 		if err != nil || !writable {
-			return nil, &allino.CodeError{StatusCode: 401, Code: "UNAUTHORIZED", Msg: "login required"}
+			return nil, allino.NewCodeError(401, "UNAUTHORIZED", "login required")
 		}
 		return &AuthCSRFOutput{
 			User: uid,

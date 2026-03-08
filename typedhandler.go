@@ -1,12 +1,12 @@
 package allino
 
 import (
-	"cmp"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"reflect"
-	"slices"
+	"sort"
+	"strings"
 
 	"go.uber.org/zap"
 )
@@ -24,23 +24,62 @@ type idxhandler struct {
 	h TypedHandler
 }
 
+// パスの優先度を判定するロジック
+func comparePaths(p1, p2 string) bool {
+	s1 := strings.Split(strings.Trim(p1, "/"), "/")
+	s2 := strings.Split(strings.Trim(p2, "/"), "/")
+
+	for k := 0; k < len(s1) && k < len(s2); k++ {
+		char1 := s1[k]
+		char2 := s2[k]
+
+		// スコア付け (低いほど優先度が高い)
+		// 静的: 0, パラメータ(:): 1, ワイルドカード(*): 2
+		score1 := getPriority(char1)
+		score2 := getPriority(char2)
+
+		if score1 != score2 {
+			return score1 < score2
+		}
+	}
+
+	// セグメントが同じ場合は、より長いパス（深い階層）を先に持ってくる
+	return len(s1) > len(s2)
+}
+
+func getPriority(segment string) int {
+	if strings.HasPrefix(segment, ":") {
+		return 1
+	}
+	if strings.Contains(segment, "*") {
+		return 2
+	}
+	return 0 // 静的パス
+}
+
 func (s *Server) RegisterAllTypedHandler() {
 	list := make([]*idxhandler, len(typedHandlerList))
 	for i, h := range typedHandlerList {
 		list[i] = &idxhandler{i, h}
 	}
 
-	slices.SortFunc(list, func(a, b *idxhandler) int {
-		r := cmp.Compare(a.h.Options().Priority, b.h.Options().Priority)
-		if r == 0 {
-			cmp.Compare(a.i, b.i)
-		}
-		return r
+	//slices.SortFunc(list, func(a, b *idxhandler) int {
+	//	r := cmp.Compare(a.h.Options().Priority, b.h.Options().Priority)
+	//	if r == 0 {
+	//		cmp.Compare(a.i, b.i)
+	//	}
+	//	return r
+	//})
+
+	sort.Slice(list, func(i, j int) bool {
+		return comparePaths(list[i].h.Options().Path, list[j].h.Options().Path)
 	})
 
 	for _, l := range list {
 		if !l.h.Options().Internal {
 			s.TypedHandle(l.h)
+		} else {
+			s.internalHandlerCache = append(s.internalHandlerCache, l.h)
 		}
 	}
 }
@@ -62,19 +101,26 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 	}
 
 	var tDefault T
-	tType := reflect.TypeOf(tDefault)
-	if tType != nil {
-		if reflect.ValueOf(tDefault).Kind() == reflect.Ptr {
-			tDefault = reflect.New(tType.Elem()).Interface().(T)
-			setDefault(tDefault)
-			//defaults.Set(tDefault)
-		} else {
-			tDefaultPtr := reflect.New(tType).Interface()
-			setDefault(tDefaultPtr)
-			//defaults.Set(&tDefault)
-			tDefault = reflect.ValueOf(tDefaultPtr).Elem().Interface().(T)
+	tDefault = NewRefOf[T](func(a any) {
+		setDefault(a)
+	})
+
+	/*
+		var tDefault T
+		tType := reflect.TypeOf(tDefault)
+		if tType != nil {
+			if reflect.ValueOf(tDefault).Kind() == reflect.Ptr {
+				tDefault = reflect.New(tType.Elem()).Interface().(T)
+				setDefault(tDefault)
+				//defaults.Set(tDefault)
+			} else {
+				tDefaultPtr := reflect.New(tType).Interface()
+				setDefault(tDefaultPtr)
+				//defaults.Set(&tDefault)
+				tDefault = reflect.ValueOf(tDefaultPtr).Elem().Interface().(T)
+			}
 		}
-	}
+	*/
 
 	var t *T
 	var u *U
@@ -93,6 +139,10 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 	}
 	options.inputType = reflect.TypeOf(t).Elem()
 	inputReflectPlan = buildPlan(option.inputType)
+
+	if reflect.TypeOf(k).Elem() == reflect.TypeOf((*error)(nil)).Elem() {
+		options.eiserror = true
+	}
 
 	if options.InputTypeHint != nil {
 		options.inputType = reflect.TypeOf(options.InputTypeHint)
@@ -119,7 +169,8 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 	//var contentTypeHandlerJSON = contentTypeHandlerMap[JSON]
 	var contentTypeHandlerHTML = contentTypeHandlerMap[HTML]
 
-	rw := &GenericTypedHandler[T, U, E]{
+	var rw *GenericTypedHandler[T, U, E]
+	rw = &GenericTypedHandler[T, U, E]{
 		options:    options,
 		handlefunc: handlefunc,
 		handler: func(r *Request) {
@@ -148,63 +199,70 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 			var resp U
 			if err == nil {
 
+				var consumed bool
 				if options.RequestHandler != nil {
-					err = options.RequestHandler(r, param)
+					consumed, err = options.RequestHandler(r, param)
 				}
 
-				if err == nil {
+				if err == nil && !consumed {
 					for _, ext := range r.cache.extopts {
-						if err == nil && ext.RequestHandler != nil {
-							err = ext.RequestHandler(r, options, param)
+						if err == nil && !consumed && ext.RequestHandler != nil {
+							consumed, err = ext.RequestHandler(r, options, param)
 						}
 					}
 				}
 
 				r.cache.input = param
-				if err == nil {
-					resp, err = handlefunc(r, param)
+				if err == nil && !consumed {
+					resp, err = rw.call_internal(r, param, false)
+					//consumed, resp, err = cachedHandleFunc(r, handlefunc, options, param)
+					//if !consumed {
+					//	resp, err = handlefunc(r, param)
+					//}
 				}
 
 			}
-			// AutoAuditLogger
-			autoaudit := false
-			switch r.config.Log.Audit.AutoAuditPolicy {
-			case AutoAuditAlways:
-				autoaudit = true
-			case AutoAuditLogin:
-				uid, _, _, _ := r.User()
-				if uid != "" {
+			/*
+				// AutoAuditLogger
+				autoaudit := false
+				switch r.config.Log.Audit.AutoAuditPolicy {
+				case AutoAuditAlways:
 					autoaudit = true
-				}
-			}
-
-			if options.AutoAudit || autoaudit {
-				autoauditmsg := "autoaudit"
-				if options.AutoAuditMsg != "" {
-					autoauditmsg = options.AutoAuditMsg
-				}
-				if !isReallyNil(err) {
-					r.Audit(autoauditmsg, zap.Any("error", err))
-				} else {
-					var respAny any = resp
-					switch v := respAny.(type) {
-					case []byte:
-						if r.config.Log.Audit.AutoAuditBytesOutput {
-							r.Audit(autoauditmsg, zap.Binary("output", v))
-						} else {
-							r.Audit(autoauditmsg)
-						}
-					case string:
-						if r.config.Log.Audit.AutoAuditStringOutput {
-							r.Audit(autoauditmsg, zap.String("output", v))
-						} else {
-							r.Audit(autoauditmsg)
-						}
-					default:
-						r.Audit(autoauditmsg, zap.Any("output", v))
+				case AutoAuditLogin:
+					uid, _, _, _ := r.User()
+					if uid != "" {
+						autoaudit = true
 					}
 				}
-			}
+
+				if options.AutoAudit || autoaudit {
+					autoauditmsg := "autoaudit"
+					if options.AutoAuditMsg != "" {
+						autoauditmsg = options.AutoAuditMsg
+					}
+					if !isReallyNil(err) {
+						r.Audit(autoauditmsg, zap.Any("error", err))
+					} else {
+						var respAny any = resp
+						switch v := respAny.(type) {
+						case []byte:
+							if r.config.Log.Audit.AutoAuditBytesOutput {
+								r.Audit(autoauditmsg, zap.Binary("output", v))
+							} else {
+								r.Audit(autoauditmsg)
+							}
+						case string:
+							if r.config.Log.Audit.AutoAuditStringOutput {
+								r.Audit(autoauditmsg, zap.String("output", v))
+							} else {
+								r.Audit(autoauditmsg)
+							}
+						default:
+							r.Audit(autoauditmsg, zap.Any("output", v))
+						}
+					}
+				}
+			*/
 
 			// Response
 			if !isReallyNil(err) {
@@ -218,8 +276,10 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 				}
 
 				if options.ErrorHandler != nil {
-					options.ErrorHandler(r, err)
-					return
+					ok := options.ErrorHandler(r, err)
+					if ok {
+						return
+					}
 				}
 
 				h := contentTypeHandlerThis //Map[options.ContentType]
@@ -246,8 +306,10 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 			}
 
 			if options.ResponseHandler != nil {
-				options.ResponseHandler(r, resp)
-				return
+				ok := options.ResponseHandler(r, resp)
+				if ok {
+					return
+				}
 			}
 
 			h := contentTypeHandlerThis //Map[options.ContentType]
@@ -263,6 +325,8 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 			}
 		},
 	}
+
+	options.consumer = rw.job_consume
 
 	typedHandlerList = append(typedHandlerList, rw)
 	return rw
@@ -295,15 +359,31 @@ func (rw *GenericTypedHandler[T, U, E]) Copy() TypedHandler {
 	}
 }
 
-func (rw *GenericTypedHandler[T, U, E]) Call(r *Request, input T) (output U, err E) {
+func (rw *GenericTypedHandler[T, U, E]) Call(r *Request, input T) (output U, err error) {
 	newR := *r // shallow copy (rは構造体)
-	opt := newR.cache.options
+	newR.memo = requestMemo{}
+	opt := rw.options
 	if opt != nil {
 		newR.loggerWith = r.Logger().With(zap.String("caller", opt.Path)) // 区別しやすく
 	}
 
-	output, err = rw.handlefunc(&newR, input)
+	if !r.config.System.DisableValidator {
+		if err := r.cache.validator.Struct(input); err != nil {
+			var zeroU U
+			return zeroU, err
+		}
+	}
+
+	output, err = rw.call_internal(&newR, input, true)
 	return
+}
+
+func (rw *GenericTypedHandler[T, U, E]) NewInputWithDefault() T {
+	var t T
+	t = NewRefOf[T](func(a any) {
+		setDefault(a)
+	})
+	return t
 }
 
 func (rw *GenericTypedHandler[T, U, E]) HandleRequest(r *Request) {
@@ -376,7 +456,7 @@ func init() {
 			}
 			buf, err := json.MarshalIndent(output, "", "  ")
 			if err != nil {
-				r.errorJSON(options.ErrorStatusCode, options.NoWrapJSON, err)
+				r.errorJSON(options.ErrorStatusCode, options.NoWrapJSON, options.eiserror, err)
 				return
 			}
 
@@ -389,7 +469,7 @@ func init() {
 				return
 			}
 
-			r.errorJSON(options.ErrorStatusCode, options.NoWrapJSON, err)
+			r.errorJSON(options.ErrorStatusCode, options.NoWrapJSON, options.eiserror, err)
 		},
 	}
 }

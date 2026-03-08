@@ -82,11 +82,7 @@ var ErrorTestAPITypedHandler = allino.NewTypedAPI("/test/error",
 		case "normal":
 			return nil, errors.New("something went wrong")
 		case "code":
-			return nil, &allino.CodeError{
-				StatusCode: 403,
-				Code:       "FORBIDDEN",
-				Msg:        "you are not allowed",
-			}
+			return nil, allino.NewCodeError(403, "FORBIDDEN", "you are not allowed")
 		default:
 			return &ErrorTestAPIOutput{
 				Message: "OK",

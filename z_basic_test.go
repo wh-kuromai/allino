@@ -7,19 +7,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rs/xid"
 	"github.com/wh-kuromai/allino"
 	"github.com/wh-kuromai/allino/example/test/handlers"
 
 	_ "github.com/lib/pq"
+	_ "modernc.org/sqlite"
 )
 
 var s = allino.NewTestServer(&allino.Config{
-	Redis: allino.RedisConfig{
-		URL: "redis://localhost:6379/0",
-	},
+	//Redis: allino.RedisConfig{
+	//	URL: "redis://localhost:6379/0",
+	//},
 	SQL: allino.SQLConfig{
-		Driver: "postgres",
-		DSN:    "postgresql://testuser@localhost:5432/testdb?sslmode=disable",
+		Driver: "sqlite",
+		DSN:    "./tmp/test_sqlite" + xid.New().String() + ".db", //"postgresql://testuser@localhost:5432/testdb?sslmode=disable",
 	},
 })
 
@@ -98,7 +100,7 @@ func TestValidationAPI_MissingName(t *testing.T) {
 	bodybuf, _ := io.ReadAll(w.Body)
 
 	if w.StatusCode == 200 {
-		t.Errorf("Expected validation error, got 200 OK," + string(bodybuf))
+		t.Errorf("Expected validation error, got 200 OK: %s", string(bodybuf))
 	}
 	var resp allino.APIResponse[any]
 	if err := json.Unmarshal(bodybuf, &resp); err == nil {
@@ -129,12 +131,12 @@ func TestErrorAPI_NormalError(t *testing.T) {
 		t.Errorf("Expected status 400, got %d", w.StatusCode)
 	}
 
-	var resp allino.APIError[allino.Error]
+	var resp allino.APIError[*allino.Error]
 	if err := json.Unmarshal(bodybuf, &resp); err != nil {
 		t.Fatalf("Failed to decode JSON: %v", err)
 	}
 
-	if resp.Err.Msg == "" {
+	if resp.Err.Error() == "" {
 		t.Errorf("Expected error message, got empty string")
 	}
 }
@@ -148,16 +150,16 @@ func TestErrorAPI_CodeError(t *testing.T) {
 		t.Errorf("Expected status 403, got %d", w.StatusCode)
 	}
 
-	var resp allino.APIError[*allino.CodeError]
+	var resp allino.APIError[*allino.Error]
 	if err := json.Unmarshal(bodybuf, &resp); err != nil {
 		t.Fatalf("Failed to decode JSON: %v", err)
 	}
 
-	if resp.Err.Code != "FORBIDDEN" {
-		t.Errorf("Expected error code FORBIDDEN, got %s", resp.Err.Code)
+	if resp.Err.ErrorCode() != "FORBIDDEN" {
+		t.Errorf("Expected error code FORBIDDEN, got %s", resp.Err.ErrorCode())
 	}
-	if resp.Err.Msg != "you are not allowed" {
-		t.Errorf("Unexpected error message: %s", resp.Err.Msg)
+	if resp.Err.Error() != "you are not allowed" {
+		t.Errorf("Unexpected error message: %s", resp.Err.Error())
 	}
 }
 

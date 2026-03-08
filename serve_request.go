@@ -27,6 +27,21 @@ var (
 	ErrNotStruct     = errors.New("get need pointer for struct")
 )
 
+type RequestType int
+
+const (
+	REQUEST_VIRTUAL RequestType = iota
+	REQUEST_HTTP
+	REQUEST_WS
+	REQUEST_JOB
+)
+
+var requestTypeStr = []string{"virt", "req", "ws", "job"}
+
+func (r RequestType) String() string {
+	return requestTypeStr[int(r)]
+}
+
 type Request struct {
 	config     *Config
 	fiber      *fiber.Ctx
@@ -36,15 +51,23 @@ type Request struct {
 	sql        *sql.DB
 
 	issubrequest bool
+	memo         requestMemo
 
 	cache *requestCache
 }
 
+type requestMemo struct {
+	jobid          string
+	jobabortctrl   string
+	jobrequeuewait int
+}
+
 type requestCache struct {
+	req_type  RequestType
 	requestid string
 	clientip  string
 
-	options          *HandlerOption
+	taskwheel        *twWheel
 	validator        *validator.Validate
 	input            any
 	sessionid        string
@@ -58,6 +81,9 @@ type requestCache struct {
 	cachedJWTBody  []byte
 	cachedErr      error
 	authorizedBy   string
+
+	parentjobid string
+	rootjobid   string
 
 	jwtdecodedbyclaims map[string]string
 	jwtdecodedbytag    map[string]json.RawMessage
@@ -74,7 +100,9 @@ func NewRequest(s *Server, w *fiber.Ctx) *Request {
 		redis:  s.Redis,
 		sql:    s.SQL,
 		cache: &requestCache{
+			ctx:       s.appctx,
 			extopts:   s.extopts,
+			taskwheel: s.taskwheel,
 			validator: s.Validator,
 		},
 	}
@@ -121,7 +149,7 @@ func (r *Request) RequestID() string {
 	}
 
 	if rid == "" {
-		rid = xid.New().String()
+		rid = r.cache.req_type.String() + ":" + xid.New().String()
 	}
 
 	r.cache.requestid = rid
