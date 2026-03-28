@@ -205,13 +205,18 @@ func (r *Request) User() (uid, displayname string, writable bool, err error)
 // If the cookie is missing, it generates a new ID and sets it via fiber.Ctx.
 func (r *Request) SessionID() string
 func (r *Request) Context() context.Context
-type CodeError struct {
-  StatusCode int `json:"-"` // If 0, HandlerOption.ResponseStatusCode will be used.
-// Set ResponseStatusCode first to ensure OpenAPI generation reflects it correctly.
-// Use this type if you want to return multiple distinct status codes.
-  Code string `json:"code,omitempty"`
-  Msg string `json:"msg,omitempty"`
+// NewCodeError makes error returning specified http status code.
+func NewCodeError(statusCode int, code string, msg string) error
+// fmt.Errorf version of NewCodeError. (compatible with errors.Is/errors.As)
+func NewCodeErrorf(statusCode int, code string, format strng, a ...any) error
+// or implememnts HttpError interface to your own error for specify status code.
+type HttpError interface {
+	StatusCode() int
 }
+// NewStatusError makes error returns only status code.
+func NewStatusError(status int) error
+// NewRedirectError makes error performing redirect. Since allino requires typed responses via generics, redirects are treated as error values.
+func NewRedirectError(status int, location string) error
 // IssueCSRFToken issues a short-lived token used to protect write operations from CSRF attacks.
 func IssueCSRFToken(r *Request, uid string) string
 // IssueAccessToken issues a short-lived token used to API access.
@@ -219,11 +224,6 @@ func IssueCSRFToken(r *Request, uid string) string
 func IssueAccessToken(r *Request, uid, displayname string, jwt_custom_claims ...map[string]any) string
 // IssueLoginCookie issues a login cookie for user authentication.
 func IssueLoginCookie(r *Request, uid, displayname string, jwt_custom_claims ...map[string]any) *fiber.Cookie
-// Use this when you want to perform a redirect. Since allino requires typed responses via generics, redirects are treated as error values.
-type RedirectError struct {
-  StatusCode int // if 0, use 302
-  Location string
-}
 type HandlerOption struct {
 	Path string
 	Method string // "GET", "POST", etc.
@@ -256,11 +256,15 @@ type HandlerOption struct {
   //   "dispatch"   : Hybrid of Async + Cache. Returns a cached result synchronously if found; otherwise, enqueues as 'async'. (Requires idempotency)
   JobMode string
   Job JobOption
+  Cron string // Cron expression to schedule this handler.
 }
 type JobOption struct {
 	Priority int // optional. Priority of the handler's jobs. Higher values indicate higher priority.
   CacheExpire time.Duration // optional. Cache expiration duration. Persistent if 0 (default).
   Interval time.Duration // optional. Approximate interval between executions (used in async/dispatch mode).
+}
+type IdempotentRequest interface {
+	IdempotencyKey() string // Override caches/stores key, when input struct of the handler implements this.
 }
 // Call executes the handler.
 // This can be used inside another handler or from application code.

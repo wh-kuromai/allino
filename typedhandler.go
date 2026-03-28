@@ -15,6 +15,7 @@ type TypedHandler interface {
 	Options() *HandlerOption
 	Copy() TypedHandler
 	HandleRequest(r *Request)
+	HandleCall(r *Request, input any) (output any, err error)
 }
 
 var typedHandlerList []TypedHandler
@@ -76,11 +77,7 @@ func (s *Server) RegisterAllTypedHandler() {
 	})
 
 	for _, l := range list {
-		if !l.h.Options().Internal {
-			s.TypedHandle(l.h)
-		} else {
-			s.internalHandlerCache = append(s.internalHandlerCache, l.h)
-		}
+		s.TypedHandle(l.h)
 	}
 }
 
@@ -326,6 +323,9 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 		},
 	}
 
+	if options.Name != "" {
+		handlerMarshalMap[encodeHandlerName(options)] = rw
+	}
 	options.consumer = rw.job_consume
 
 	typedHandlerList = append(typedHandlerList, rw)
@@ -344,6 +344,9 @@ type GenericTypedHandler[T, U any, E error] struct {
 	options    *HandlerOption
 	handlefunc func(r *Request, input T) (output U, err E)
 	handler    func(r *Request)
+
+	// for SelfDiscovery
+	Handler string `json:"handler"`
 }
 
 func (rw *GenericTypedHandler[T, U, E]) Options() *HandlerOption {
@@ -388,6 +391,12 @@ func (rw *GenericTypedHandler[T, U, E]) NewInputWithDefault() T {
 
 func (rw *GenericTypedHandler[T, U, E]) HandleRequest(r *Request) {
 	rw.handler(r)
+}
+
+func (rw *GenericTypedHandler[T, U, E]) HandleCall(r *Request, input any) (output any, err error) {
+	var inT T
+	inT, _ = input.(T)
+	return rw.Call(r, inT)
 }
 
 var contentTypeHandlerMap map[string]*contentTypeHandler

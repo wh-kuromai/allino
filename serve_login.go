@@ -239,10 +239,8 @@ func (r *Request) SessionID() string {
 		r.cache.sessionid = uuid.New().String() // fallback to new session id
 	}
 
-	if !r.issubrequest {
-		ngcookie := IssueGuestCookie(r)
-		r.fiber.Cookie(ngcookie)
-	}
+	ngcookie := IssueGuestCookie(r)
+	r.fiber.Cookie(ngcookie)
 
 	return r.cache.sessionid
 }

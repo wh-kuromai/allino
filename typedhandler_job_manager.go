@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+type IdempotentRequest interface {
+	IdempotencyKey() string
+}
+
 const (
 	JOB_ABORT_REQUEUE    = "requeue"
 	JOB_ABORT_REQUEUE_AT = "requeue_at"
@@ -80,6 +84,14 @@ func handlerVersion(opt *HandlerOption) string {
 	return v
 }
 
+func getIdempotentKey(input any) string {
+	ir, ok := input.(IdempotentRequest)
+	if ok {
+		return ir.IdempotencyKey()
+	}
+	return ""
+}
+
 func encodeHandlerName(opt *HandlerOption) string {
 	return opt.Name + "@" + handlerVersion(opt)
 }
@@ -91,25 +103,27 @@ func encodeJobKey(handler string, injson []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func encodeJobID(backend, handler string, injson []byte, marker string) string {
-	if backend == "" {
-		backend = "default"
-	}
+func encodeJobID(handler string, input any, injson []byte, marker string) string {
 	if marker != "" {
 		marker = "." + marker
 	}
+
+	jobid := getIdempotentKey(input)
+	if jobid == "" {
+		jobid = encodeJobKey(handler, injson)
+	}
+
 	return strings.Join([]string{
 		jobIDPrefix,
-		jobIDVersion + marker,
-		backend,
+		jobIDVersion,
 		handler,
-		encodeJobKey(handler, injson),
+		jobid + marker,
 	}, jobIDSep)
 }
 
 func decodeJobID(s string) (*jobid, error) {
 	parts := strings.Split(s, jobIDSep)
-	if len(parts) != 5 {
+	if len(parts) != 4 {
 		return nil, errors.New("invalid jobid format")
 	}
 
@@ -122,9 +136,8 @@ func decodeJobID(s string) (*jobid, error) {
 
 	return &jobid{
 		Version: parts[1],
-		Backend: parts[2],
-		Handler: parts[3],
-		ID:      parts[4],
+		Handler: parts[2],
+		ID:      parts[3],
 	}, nil
 }
 
@@ -136,6 +149,7 @@ var FatalBackendError = NewError("fatal: backend error")
 var ErrJobDuplicated = NewError("job already executed")
 
 var ErrJobNotFound = NewError("job not found")
+var ErrJobNotFinished = NewError("job not finished")
 var ErrJobExpired = NewError("job has beed expired")
 
 var ErrJobHandlerMismatch = NewError("job does not belong to this handler")
@@ -228,7 +242,7 @@ func marshalOutputSet[U any, E error](output U, err error) (outJSON []byte, errJ
 	return outJSON, nil, nil
 }
 
-func minorOrAboveDiff(a, b string) bool {
+func hasMajorOrMinorVersionDiff(a, b string) bool {
 	ma, mi, err := parseMajorMinor(a)
 	if err != nil {
 		return false

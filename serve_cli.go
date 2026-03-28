@@ -19,6 +19,8 @@ type CLI struct {
 	bind      string
 }
 
+var cliServer *Server
+
 func NewCLI(config *Config) *CLI {
 	cli := &CLI{config: config}
 
@@ -37,6 +39,9 @@ func NewCLI(config *Config) *CLI {
 		Use:   "allino",
 		Short: "allino - AI-first web framework server",
 		//Long:  helptemplate,
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			cliServer = cli.initServer()
+		},
 	}
 	cli.Command = rootCmd
 
@@ -49,7 +54,7 @@ func NewCLI(config *Config) *CLI {
 			Use:   "serve",
 			Short: "Start the web server",
 			Run: func(cmd *cobra.Command, args []string) {
-				s := cli.InitServer()
+				s := CLIServer()
 				s.RegisterAllTypedHandler()
 				s.Serve()
 			},
@@ -64,7 +69,7 @@ func NewCLI(config *Config) *CLI {
 			Run: func(cmd *cobra.Command, args []string) {
 				config.ConfigDir = os.Getenv("PROXYVISOR_PLUGIN_CONFIG_DIR")
 				config.Bind = os.Getenv("PROXYVISOR_PLUGIN_ADDRESS")
-				s := cli.InitServer()
+				s := CLIServer()
 				s.RegisterAllTypedHandler()
 				s.Serve()
 			},
@@ -76,7 +81,7 @@ func NewCLI(config *Config) *CLI {
 			Use:   "openapi",
 			Short: "Generate OpenAPI YAML",
 			Run: func(cmd *cobra.Command, args []string) {
-				s := cli.InitServer()
+				s := CLIServer()
 				s.RegisterAllTypedHandler()
 				printOpenAPI(s)
 			},
@@ -88,7 +93,7 @@ func NewCLI(config *Config) *CLI {
 			Use:   "route",
 			Short: "Print registered routes",
 			Run: func(cmd *cobra.Command, args []string) {
-				s := cli.InitServer()
+				s := CLIServer()
 				s.RegisterAllTypedHandler()
 				printRoute(s)
 			},
@@ -100,7 +105,7 @@ func NewCLI(config *Config) *CLI {
 			Use:   "version",
 			Short: "Print version info",
 			Run: func(cmd *cobra.Command, args []string) {
-				s := cli.InitServer()
+				s := CLIServer()
 				fmt.Println("Allino v" + s.Config.Version)
 			},
 		})
@@ -111,7 +116,7 @@ func NewCLI(config *Config) *CLI {
 			Use:   "keygen",
 			Short: "Generate secrets.config.json file",
 			Run: func(cmd *cobra.Command, args []string) {
-				s := cli.InitServer()
+				s := CLIServer()
 				cliKeygen(s)
 			},
 		})
@@ -123,7 +128,7 @@ func NewCLI(config *Config) *CLI {
 			Use:   "encrypt",
 			Short: "Encrypt config file",
 			RunE: func(cmd *cobra.Command, args []string) error {
-				s := cli.InitServer()
+				s := CLIServer()
 				return cliEncrypt(s.envPrefix(), encryptFile)
 			},
 		}
@@ -151,7 +156,11 @@ func NewCLI(config *Config) *CLI {
 	return cli
 }
 
-func (cli *CLI) InitServer() *Server {
+func CLIServer() *Server {
+	return cliServer
+}
+
+func (cli *CLI) initServer() *Server {
 
 	if cli.workDir != "" {
 		os.Chdir(cli.workDir)

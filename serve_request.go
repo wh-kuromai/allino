@@ -33,6 +33,7 @@ const (
 	REQUEST_VIRTUAL RequestType = iota
 	REQUEST_HTTP
 	REQUEST_WS
+	REQUEST_CRON
 	REQUEST_JOB
 )
 
@@ -50,8 +51,7 @@ type Request struct {
 	redis      redis.UniversalClient
 	sql        *sql.DB
 
-	issubrequest bool
-	memo         requestMemo
+	memo requestMemo
 
 	cache *requestCache
 }
@@ -191,10 +191,6 @@ func cachedRegex(rx string) (*regexp.Regexp, error) {
 	}
 	cachedRx.Store(rx, re)
 	return re, nil
-}
-
-func (r *Request) IsSubRequest() bool {
-	return r.issubrequest
 }
 
 func (r *Request) Context() context.Context {

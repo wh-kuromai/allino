@@ -16,6 +16,24 @@ import (
 //}
 
 func (r *Server) TypedHandle(th TypedHandler) {
+	if th.Options().Cron != "" {
+		eid, err := r.Cron.AddFunc(th.Options().Cron, func() {
+			rr := NewRequest(r, nil)
+			rr.cache.req_type = REQUEST_CRON
+			th.HandleCall(rr, nil)
+		})
+		if err == nil {
+			th.Options().cronid = eid
+		} else {
+			r.Logger.Error("cron error", zap.String("spec", th.Options().Cron), zap.String("handler", th.Options().Name))
+		}
+	}
+
+	if th.Options().Internal {
+		r.internalHandlerCache = append(r.internalHandlerCache, th)
+		return
+	}
+
 	opt := th.Options()
 	if opt.CORS {
 		r.Fiber.Add("OPTIONS", opt.Path, func(w *fiber.Ctx) error {

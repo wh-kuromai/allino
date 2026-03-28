@@ -2,7 +2,58 @@ package allino
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
+
+	"github.com/gofiber/fiber/v2"
 )
+
+type FiberHandler interface {
+	HandleFiber(w *fiber.Ctx)
+}
+
+type RedirectError struct {
+	StatusCode int
+	Location   string
+	Err        error
+}
+
+func (e *RedirectError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return http.StatusText(e.StatusCode) + " redirect to " + e.Location
+}
+
+func (e *RedirectError) HandleFiber(w *fiber.Ctx) {
+	w.Set("Location", e.Location)
+	w.Status(e.StatusCode)
+}
+
+func NewRedirectError(status int, location string) *RedirectError {
+	return &RedirectError{
+		StatusCode: status,
+		Location:   location,
+	}
+}
+
+type StatusError struct {
+	StatusCode int
+}
+
+func (e *StatusError) Error() string {
+	return http.StatusText(e.StatusCode) + " error"
+}
+
+func (e *StatusError) HandleFiber(w *fiber.Ctx) {
+	w.Status(e.StatusCode)
+}
+
+func NewStatusError(status int) *StatusError {
+	return &StatusError{
+		StatusCode: status,
+	}
+}
 
 type HttpError interface {
 	error
@@ -28,12 +79,14 @@ func NewCodeError(status int, code, msg string) *Error {
 	}
 }
 
-func NewCodeErrorWith(status int, code string, err error) *Error {
-	return &Error{
+func NewCodeErrorf(status int, code, format string, a ...any) *Error {
+	e := &Error{
 		Status: status,
 		Code:   code,
-		Err:    err,
 	}
+	e.Err = fmt.Errorf(format, a...)
+	e.Msg = e.Err.Error()
+	return e
 }
 
 type Error struct {

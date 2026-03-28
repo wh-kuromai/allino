@@ -388,6 +388,10 @@ func (s *Server) errorPrintln(msg string, err error) {
 	}
 }
 
+func (s *Server) Context() context.Context {
+	return s.appctx
+}
+
 func (s *Server) Quit() {
 	s.appcancel()
 }

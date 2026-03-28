@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-type jobconsumer = func(r *Request, backend, handler string, injson []byte) (key string, outjson []byte, err []byte, syserr error)
+type jobconsumer = func(r *Request, handler string, injson []byte) (key string, outjson []byte, err []byte, syserr error)
 
 type callSQLStrategy struct {
 	name     string
@@ -19,15 +19,15 @@ type callSQLStrategy struct {
 	issqlite bool
 	mu       sync.Mutex
 
-	handlers      jobset
+	handlers      *jobset
 	handlerOptMap map[string]*HandlerOption
 
 	lastDequeuedId       atomic.Int64
 	dequeueThroughputEMA EMACalculator
-	lockedHandlers       jobset
-
-	waitInterval time.Duration
-	waitTimeout  time.Duration
+	lockedHandlers       *jobset
+	waitInterval         time.Duration
+	waitTimeout          time.Duration
+	maxretry             int
 }
 
 func newcallSQLStrategy(sv *Server) *callSQLStrategy {
@@ -40,6 +40,7 @@ func newcallSQLStrategy(sv *Server) *callSQLStrategy {
 		lockedHandlers: newJobset(),
 		waitInterval:   sv.Config.JobConfig.WaitInterval,
 		waitTimeout:    sv.Config.JobConfig.WaitTimeout,
+		maxretry:       sv.Config.JobConfig.MaxRetry,
 	}
 
 	s.lastDequeuedId.Store(-1)
@@ -68,7 +69,7 @@ func (c *callSQLStrategy) Init(ctx context.Context) error {
 		key TEXT UNIQUE,
 		handler TEXT,
 		version TEXT,
-		status TEXT NOT NULL,          -- queued / leased / done / error / canceled
+		status TEXT NOT NULL,          -- queued / leased / done / error / dead
 		parentid TEXT,
 		rootid TEXT,
 		input BLOB,
@@ -108,16 +109,14 @@ func (c *callSQLStrategy) Enqueue(
 	ctx context.Context,
 	handler string,
 	meta JobMeta,
+	key string,
 	injson []byte,
 	delay_sec int,
-	marker string,
-) (bool, string, error) {
+) (bool, error) {
 	if c.issqlite {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 	}
-
-	key := encodeJobID(c.name, handler, injson, marker)
 
 	now := time.Now()
 
@@ -150,19 +149,19 @@ WHERE executions.status='done'
 		meta.Priority, meta.TTL, now, now, now, injson, now)
 
 	if err != nil {
-		return false, "", err
+		return false, err
 	}
 
 	rows, err := res.RowsAffected()
 	if err != nil {
-		return false, "", err
+		return false, err
 	}
 
 	if rows > 0 {
-		return true, key, nil
+		return true, nil
 	}
 
-	return false, key, nil
+	return false, nil
 }
 
 func (c *callSQLStrategy) Dequeue(
@@ -278,7 +277,7 @@ SET
 WHERE 
     status = 'leased' 
     AND leased_until < ?
-    AND retry_count >= 5;
+    AND retry_count >= ?;
 
 UPDATE executions
 SET 
@@ -289,7 +288,7 @@ SET
 WHERE 
     status = 'leased' 
     AND leased_until < ?; -- 期限切れのジョブのみ対象
-	`, now, now)
+	`, now, now, c.maxretry, now, now)
 
 	return err
 }
@@ -445,10 +444,9 @@ func (c *callSQLStrategy) Wait(
 func (c *callSQLStrategy) Hit(
 	ctx context.Context,
 	handler string,
+	key string,
 	injson []byte,
 ) (JobInfo, []byte, []byte, error) {
-
-	key := encodeJobID(c.name, handler, injson, "")
 
 	row := c.db.QueryRowContext(ctx, `
 	SELECT key, handler, version, status, parentid, rootid, priority, ttl, created_at, updated_at, leased_until, output, error
@@ -495,6 +493,7 @@ func (c *callSQLStrategy) Done(
 	ctx context.Context,
 	handler string,
 	meta JobMeta,
+	key string,
 	injson []byte,
 	outjson []byte,
 	errjson []byte,
@@ -504,7 +503,6 @@ func (c *callSQLStrategy) Done(
 		defer c.mu.Unlock()
 	}
 
-	key := encodeJobID(c.name, handler, injson, "")
 	status := "done"
 	if errjson != nil {
 		status = "error"

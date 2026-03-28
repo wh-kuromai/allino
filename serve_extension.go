@@ -36,28 +36,53 @@ type extendable interface {
 type Extension[E, F any] struct {
 	Option *ExtOption
 	Config *E
+
+	eIsAny bool
+	fIsAny bool
 }
 
-func (c Extension[E, F]) HandlerOptionExt(opt *HandlerOption) (*F, bool) {
+func (c *Extension[E, F]) HandlerOptionExt(opt *HandlerOption) (F, bool) {
+	var zeroF F
 	if opt == nil {
-		return nil, false
+		return zeroF, false
 	}
 	if opt.exts == nil {
 		opt.exts = &sync.Map{}
 	}
+
 	t := reflect.TypeOf((*F)(nil)).Elem()
 	v, ok := opt.exts.Load(t)
-	if !ok {
-		v = handlerExtEntry{reflect.New(t).Interface(), false}
-		opt.exts.Store(t, v)
+	if ok {
+		he, ok2 := v.(handlerExtEntry)
+		if ok2 {
+			hev, ok3 := he.value.(F)
+			if ok3 {
+				return hev, he.isUserSet
+			}
+		}
 	}
-	return v.(handlerExtEntry).value.(*F), v.(handlerExtEntry).isUserSet
+
+	if t.Kind() == reflect.Ptr {
+		if !ok {
+			vv := reflect.New(t).Interface()
+			hev, ok3 := vv.(F)
+			if ok3 {
+				opt.exts.Store(t, handlerExtEntry{reflect.New(t).Interface(), false})
+				return hev, false
+			}
+		}
+	}
+
+	return zeroF, false
 }
 
 func (c Extension[E, F]) ExtOption() ExtOption {
 	return *c.Option
 }
 func (c Extension[E, F]) Update(setting []byte) error {
+	if c.eIsAny {
+		return nil
+	}
 	decoder := yaml.NewDecoder(bytes.NewBuffer(setting), yamlDecodeOption...)
 	return decoder.Decode(c.Config)
 }
@@ -72,6 +97,18 @@ func NewExtension[E, F any](name string, opt *ExtOption) *Extension[E, F] {
 		Config: &config,
 		Option: opt,
 	}
+
+	tEType := reflect.TypeOf((*E)(nil)).Elem()
+	tFType := reflect.TypeOf((*F)(nil)).Elem()
+	anyType := reflect.TypeOf((*any)(nil)).Elem()
+
+	if tEType == anyType {
+		ce.eIsAny = true
+	}
+	if tFType == anyType {
+		ce.fIsAny = true
+	}
+
 	extensionList = append(extensionList, ce)
 	return ce
 }

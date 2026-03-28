@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"sync"
 	"time"
+
+	"github.com/robfig/cron/v3"
 )
 
 type HandlerOption struct {
@@ -30,6 +32,7 @@ type HandlerOption struct {
 	// Job
 	Name    string
 	Version string
+	Cron    string
 	JobMode string
 	Job     JobOption
 
@@ -62,6 +65,7 @@ type HandlerOption struct {
 
 	lastRun *time.Time
 	exts    *sync.Map
+	cronid  cron.EntryID
 }
 
 func (h HandlerOption) InputType() reflect.Type {
@@ -88,23 +92,12 @@ func (h HandlerOption) WithExt(v any) HandlerOption {
 	}
 	t := reflect.ValueOf(v).Type()
 	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
 		setDefault(v)
 	} else {
 		setDefault(&v)
 	}
 
-	// --- copy-on-write ---
-	//m2 := make(map[reflect.Type]any, len(h.exts)+1)
-	//for k, vv := range h.exts {
-	//	m2[k] = vv
-	//}
-	//m2[t] = v
-	if t.Kind() == reflect.Ptr {
-		h.exts.Store(t, handlerExtEntry{v, true})
-	} else {
-		h.exts.Store(t, handlerExtEntry{&v, true})
-	}
+	h.exts.Store(t, handlerExtEntry{v, true})
 	return h
 }
 
