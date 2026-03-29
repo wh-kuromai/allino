@@ -56,6 +56,20 @@ type JobConf struct {
 type JobOpt struct {
 }
 
+var jobManagerCache = &jobManager{
+	handlers:             newJobset(),
+	handlerOptMap:        make(map[string]*HandlerOption),
+	lockedHandlers:       newJobset(),
+	dequeueThroughputEMA: NewEMACalculator(0.3),
+}
+
+type jobManager struct {
+	handlers             *jobset
+	handlerOptMap        map[string]*HandlerOption
+	lockedHandlers       *jobset
+	dequeueThroughputEMA *EMACalculator
+}
+
 var JobExtension = NewExtension[JobConf, JobOpt](
 	"job",
 	&ExtOption{
@@ -102,11 +116,8 @@ var JobExtension = NewExtension[JobConf, JobOpt](
 					})
 				}
 				opt.Job.callstrategy = callSQLstrategy
-				//}
-				err := opt.Job.callstrategy.Register(virtual.Context(), encodeHandlerName(opt), opt)
-				if err != nil && !s.Config.Log.Silent {
-					s.Logger.Info("job system error", zap.String("component", "register"), zap.Error(err))
-				}
+				jobManagerCache.handlers.Add(encodeHandlerName(opt))
+				jobManagerCache.handlerOptMap[encodeHandlerName(opt)] = opt
 			}
 
 			return nil
@@ -118,22 +129,13 @@ var JobExtension = NewExtension[JobConf, JobOpt](
 	},
 )
 
-type jobTask struct {
-	key      string
-	backend  string
-	handler  string
-	injson   []byte
-	parentid string
-	rootid   string
-}
-
-func strategyWorkerInit(s *callSQLStrategy, sv *Server) {
+func strategyWorkerInit(s callStrategy, sv *Server) {
 	idleit := sv.Config.JobConfig.IdleInterval
 	//leasesec := int(mergeSingle(sv.Config.JobConfig.LeaseSeconds, opt.Job.LeaseSeconds).Seconds())
 
 	leaset := sv.Config.JobConfig.LeaseDuration
 
-	jobchan := make(chan jobTask, sv.Config.JobConfig.Concurrency*2)
+	jobchan := make(chan JobTask, sv.Config.JobConfig.Concurrency*2)
 
 	go func() {
 		for {
@@ -141,8 +143,8 @@ func strategyWorkerInit(s *callSQLStrategy, sv *Server) {
 			case <-sv.appctx.Done():
 				return
 			default:
-				hs := s.handlers.Diff(s.lockedHandlers)
-				key, handler, meta, injson, err := s.Dequeue(sv.appctx, hs, leaset)
+				hs := jobManagerCache.handlers.Diff(jobManagerCache.lockedHandlers)
+				jtask, err := s.Dequeue(sv.appctx, hs, leaset)
 				if err != nil {
 					if !errors.Is(err, ErrJobNotFound) {
 						sv.Logger.Error("job system error", zap.String("component", "dequeue"), zap.Error(err))
@@ -151,26 +153,27 @@ func strategyWorkerInit(s *callSQLStrategy, sv *Server) {
 					continue
 				}
 
-				jt := jobTask{
-					key:      key,
-					backend:  s.name,
-					handler:  handler,
-					injson:   injson,
-					parentid: key,
-					rootid:   meta.RootID,
-				}
-
-				if jt.rootid == "" {
-					jt.rootid = key
+				//jt := jobTask{
+				//	key:      jtask.Key(),
+				//	backend:  s.name,
+				//	handler:  jtask.Handler(),
+				//	injson:   jtask.Input(),
+				//	parentid: jtask.Key(),
+				//	rootid:   jtask.Meta().RootID,
+				//}
+				//
+				jtask.Meta().ParentID = jtask.Key()
+				if jtask.Meta().RootID == "" {
+					jtask.Meta().RootID = jtask.Key()
 				}
 
 				// if dequeued need handler lock,
-				opt := s.handlerOptMap[jt.handler]
+				opt := jobManagerCache.handlerOptMap[jtask.Handler()]
 				if opt.Job.Interval != 0 {
-					s.lockedHandlers.Add(jt.handler)
+					jobManagerCache.lockedHandlers.Add(jtask.Handler())
 				}
 
-				jobchan <- jt
+				jobchan <- jtask
 			}
 		}
 	}()
@@ -182,22 +185,23 @@ func strategyWorkerInit(s *callSQLStrategy, sv *Server) {
 				select {
 				case <-sv.appctx.Done():
 					return
-				case jobn := <-jobchan:
+				case jtask := <-jobchan:
 					now := time.Now()
-					opt := s.handlerOptMap[jobn.handler]
+					opt := jobManagerCache.handlerOptMap[jtask.Handler()]
 
 					// check if need to re-dispatch
 					needDispatch := false
 					var waitDur time.Duration
 					if opt.Job.Interval != 0 && opt.lastRun != nil {
-						waitDur = time.Until((*opt.lastRun).Add(time.Duration(float64(opt.Job.Interval) * s.dequeueThroughputEMA.CurrentAverage)))
+						waitDur = time.Until((*opt.lastRun).Add(time.Duration(float64(opt.Job.Interval) * jobManagerCache.dequeueThroughputEMA.CurrentAverage)))
 						if waitDur > 0 {
 							needDispatch = true
 						}
 					}
 
 					task := sv.taskwheel.Add(time.Duration(leaset/2), func() bool {
-						err := s.LeaseUpdate(sv.appctx, jobn.key, leaset)
+						err := jtask.HeartBeat(sv.appctx, leaset)
+						//err := s.LeaseUpdate(sv.appctx, jobn.key, leaset)
 						if err != nil && !sv.Config.Log.Silent {
 							sv.Logger.Info("job system error", zap.String("component", "leaseupdate"), zap.Error(err))
 						}
@@ -207,28 +211,32 @@ func strategyWorkerInit(s *callSQLStrategy, sv *Server) {
 					fn := func() bool {
 						r := NewRequest(sv, nil)
 						r.cache.req_type = REQUEST_JOB
-						r.cache.requestid = jobn.key
-						r.cache.parentjobid = jobn.parentid
-						r.cache.rootjobid = jobn.rootid
+						r.cache.requestid = jtask.Key()
+						r.cache.parentjobid = jtask.Meta().ParentID
+						r.cache.rootjobid = jtask.Meta().RootID
 
 						if !r.config.Log.Silent {
-							r.logger.Info("job started", zap.String("handler", jobn.handler), zap.String("requestid", jobn.key))
+							r.logger.Info("job started", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()))
 						}
-						_, outjson, errjson, syserr := opt.consumer(r, jobn.handler, jobn.injson)
+						_, outjson, errjson, syserr := opt.consumer(r, jtask.Handler(), jtask.Input())
 						if syserr != nil {
 							if !r.config.Log.Silent {
-								r.logger.Info("job failed", zap.String("handler", jobn.handler), zap.String("requestid", jobn.key), zap.Error(syserr))
+								r.logger.Info("job failed", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()), zap.Error(syserr))
 							}
-							err := s.Free(sv.appctx, jobn.key)
+
+							err := jtask.Fail(sv.appctx)
+							//err := s.Free(sv.appctx, jtask.Key())
 							if err != nil && !r.config.Log.Silent {
 								r.logger.Info("job system error", zap.String("component", "dequeue/syserr"), zap.Error(err))
 							}
 						} else if r.memo.jobabortctrl != "" {
 							// cancel if abort or error
 							if !r.config.Log.Silent {
-								r.logger.Info("job requeued", zap.String("handler", jobn.handler), zap.String("requestid", jobn.key))
+								r.logger.Info("job requeued", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()))
 							}
-							err := s.Requeue(sv.appctx, jobn.key, requeueDelay(r))
+
+							err := jtask.Requeue(sv.appctx, requeueDelay(r))
+							//err := s.Requeue(sv.appctx, jtask.Key(), requeueDelay(r))
 							if err != nil && !r.config.Log.Silent {
 								r.logger.Info("job system error", zap.String("component", "dequeue/requeue"), zap.Error(err))
 							}
@@ -242,25 +250,28 @@ func strategyWorkerInit(s *callSQLStrategy, sv *Server) {
 
 							// store if cache or dedupe
 							if !r.config.Log.Silent {
-								r.logger.Info("job completed (cache)", zap.String("handler", jobn.handler), zap.String("requestid", jobn.key))
+								r.logger.Info("job completed (cache)", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()))
 							}
 
-							err := s.DoneAsync(sv.appctx, jobn.key, ttl, outjson, errjson)
+							err := jtask.Success(sv.appctx, ttl, outjson, errjson)
+							//err := s.DoneAsync(sv.appctx, jtask.Key(), ttl, outjson, errjson)
 							if err != nil && !r.config.Log.Silent {
 								r.logger.Info("job system error", zap.String("component", "dequeue/doneasync"), zap.Error(err))
 							}
 						} else {
 							if !r.config.Log.Silent {
-								r.logger.Info("job completed", zap.String("handler", jobn.handler), zap.String("requestid", jobn.key))
+								r.logger.Info("job completed", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()))
 							}
-							err := s.Free(sv.appctx, jobn.key)
+
+							err := jtask.Fail(sv.appctx)
+							//err := s.Free(sv.appctx, jtask.Key())
 							if err != nil && !r.config.Log.Silent {
 								r.logger.Info("job system error", zap.String("component", "dequeue/etc"), zap.Error(err))
 							}
 						}
 						task.Cancel()
 						if needDispatch {
-							s.lockedHandlers.Remove(jobn.handler)
+							jobManagerCache.lockedHandlers.Remove(jtask.Handler())
 							opt.lastRun = &now
 						}
 						return false
@@ -270,7 +281,7 @@ func strategyWorkerInit(s *callSQLStrategy, sv *Server) {
 						sv.taskwheel.Add(waitDur, fn)
 					} else {
 						fn()
-						s.lockedHandlers.Remove(jobn.handler)
+						jobManagerCache.lockedHandlers.Remove(jtask.Handler())
 						opt.lastRun = &now
 					}
 				}
@@ -306,12 +317,43 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 		return zeroU, ErrJobInputEncodeFailed.With(err)
 	}
 
-	var enqueued bool
-	if asyncExec || dedupeExec {
+	var syserr error
+	unmarshalfn := func(meta JobInfo, outjson []byte, errjson []byte, serr error) (U, error, error) {
+		var ji JobInfo
+		var syserr error
+		ji, output, err, syserr = unmarshalOutputSet[U, E](meta, outjson, errjson, serr)
+		if syserr == nil {
+			if opt.Job.CacheErrOnHit {
+				return zeroU, ErrJobDuplicated, nil
+			}
+
+			if !hasMajorOrMinorVersionDiff(ji.Meta.Version, handlerVersion(opt)) {
+				if !r.config.Log.Silent {
+					r.logger.Info("job cache hit", zap.String("handler", jec.Handler()))
+				}
+				return output, err, nil
+			}
+
+			return zeroU, nil, FatalInvalidCacheError
+		}
+
+		return zeroU, nil, syserr
+	}
+
+	if cacheExec {
+		output, err, syserr = unmarshalfn(opt.Job.callstrategy.Hit(r.Context(), jec.Handler(), jec.JobID(), jec.InputJSON()))
+		if syserr == nil {
+			return output, err
+		}
+	}
+
+	var aquiredLock bool
+	if asyncExec {
+		var enqueued bool
 		enqueued, err = opt.Job.callstrategy.Enqueue(
 			r.Context(),
 			jec.Handler(),
-			jec.JobMeta(jec.EnqueueStatus()),
+			jec.JobMeta("queued"),
 			jec.JobID(),
 			jec.InputJSON(),
 			0)
@@ -321,79 +363,62 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 			}
 			// db error etc.
 			return zeroU, FatalBackendError.With(err)
-		} else if enqueued {
+		}
 
-			// if enqueued & async, return JobAcceptedError
-			if asyncExec {
-				if !r.config.Log.Silent {
-					r.logger.Info("job queued", zap.String("handler", jec.Handler()))
-				}
-				jerr := &JobAcceptedError{
-					Status: 202,
-					JobID:  jec.JobID(),
-					Msg:    "job successfully accepted",
-				}
+		if !r.config.Log.Silent {
+			r.logger.Info("job queued", zap.String("handler", jec.Handler()))
+		}
+		if enqueued {
+			return zeroU, NewJobPendingError(jec.JobID(), "job accepted")
+		}
+		return zeroU, NewJobPendingError(jec.JobID(), "job not finished yet")
 
-				return zeroU, jerr
+	} else if dedupeExec {
+		aquiredLock, err = opt.Job.callstrategy.Enqueue(
+			r.Context(),
+			jec.Handler(),
+			jec.JobMeta("running"),
+			jec.JobID(),
+			jec.InputJSON(),
+			0)
+		if err != nil {
+			if !r.config.Log.Silent {
+				r.logger.Info("job system error", zap.String("component", "requeue.enqueue"), zap.Error(err))
 			}
+			// db error etc.
+			return zeroU, FatalBackendError.With(err)
+		}
 
-			// do nothing if enqueued & dedupe, exec approved
-		} else {
-			// do nothing if enqueued failed & async, proceed cache check
-
+		if !aquiredLock {
 			// if enqueued failed & dedupe, exec declined.
-			if dedupeExec {
-				if !r.config.Log.Silent {
-					r.logger.Info("job duplicated", zap.String("handler", jec.Handler()))
-				}
-				return zeroU, ErrJobDuplicated
+			if !r.config.Log.Silent {
+				r.logger.Info("job duplicated", zap.String("handler", jec.Handler()))
 			}
-
+			return zeroU, ErrJobDuplicated
 		}
 	}
 
-	// cache check
-	if cacheExec {
-		var ji JobInfo
-		var syserr error
-
-		ji, output, err, syserr = unmarshalOutputSet[U, E](opt.Job.callstrategy.Hit(r.Context(), jec.Handler(), jec.JobID(), jec.InputJSON()))
+	// wait if memoized
+	if !aquiredLock && dedupeExec && cacheExec {
+		output, err, syserr = unmarshalfn(opt.Job.callstrategy.Hit(r.Context(), jec.Handler(), jec.JobID(), jec.InputJSON()))
 		if syserr == nil {
-			if opt.Job.CacheErrOnHit {
-				return zeroU, ErrJobDuplicated
-			}
-
-			if !hasMajorOrMinorVersionDiff(ji.Meta.Version, handlerVersion(opt)) {
-				if !r.config.Log.Silent {
-					r.logger.Info("job cache hit", zap.String("handler", jec.Handler()))
-				}
-				return output, err
-			}
-
-			// cache found but cached version is not what we expected.
-
-			return zeroU, FatalInvalidCacheError
+			return output, err
 		}
 
 		// if job is not finished, wait it
-		jnferr, ok := syserr.(*JobNotFinishedError)
+		jnferr, ok := syserr.(*JobPendingError)
 		if ok {
-			ji, output, err, syserr = unmarshalOutputSet[U, E](opt.Job.callstrategy.Wait(r.Context(), jnferr.JobID, r.cache.taskwheel))
+			output, err, syserr = unmarshalfn(opt.Job.callstrategy.Wait(r.Context(), jnferr.JobID, r.cache.taskwheel))
 			if syserr == nil {
-				if !hasMajorOrMinorVersionDiff(ji.Meta.Version, handlerVersion(opt)) {
-					return output, err
-				}
-				// cache found but cached version is not what we expected.
-				return zeroU, FatalInvalidCacheError
+				return output, err
 			}
 		}
 
+		if !r.config.Log.Silent {
+			r.logger.Info("job lost", zap.String("handler", jec.Handler()), zap.Error(syserr))
+		}
+		return zeroU, FatalBackendError.With(syserr)
 		// cache not found or expired
-	}
-
-	// return error if async job is already enqueued but not finished yet.
-	if asyncExec {
-		return zeroU, NewJobNotFinishedError(jec.JobID())
 	}
 
 	output, err = rw.handlefunc(r, input)
@@ -425,8 +450,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 
 	// mark requeue
 	if r.memo.jobabortctrl == JOB_ABORT_REQUEUE || r.memo.jobabortctrl == JOB_ABORT_REQUEUE_AT {
-
-		enqueued, err = opt.Job.callstrategy.Enqueue(
+		_, err = opt.Job.callstrategy.Enqueue(
 			r.Context(),
 			jec.Handler(),
 			jec.JobMeta(jec.EnqueueStatus()),
@@ -461,9 +485,11 @@ func (rw *GenericTypedHandler[T, U, E]) job_consume(r *Request, handler string, 
 	key = encodeJobID(handler, input, injson, "")
 
 	// fill SelfDiscovery.
-	ferr := fillSelfDiscovery(input)
-	if ferr != nil {
-		return key, nil, nil, ErrJobInputDecodeFailed.With(ferr)
+	if rw.options.hasSelfDiscovery {
+		ferr := fillSelfDiscovery(input)
+		if ferr != nil {
+			return key, nil, nil, ErrJobInputDecodeFailed.With(ferr)
+		}
 	}
 
 	outJSON, errJSON, syserr := marshalOutputSet[U, E](rw.handlefunc(r, input))
@@ -502,7 +528,23 @@ func (rw *GenericTypedHandler[T, U, E]) JobResult(r *Request, jobid string) (out
 type callStrategy interface {
 	Init(ctx context.Context) error
 
-	Register(ctx context.Context, handler string, opt *HandlerOption) error
+	// Push job to queue / Aquire Lock
+	Enqueue(ctx context.Context, handler string, meta *JobMeta, key string, injson []byte, delay_sec int) (enqueud bool, err error)
+
+	// Pull queued job.
+	Dequeue(ctx context.Context, handlers []string, lease_dur time.Duration) (jt JobTask, err error)
+
+	// Search lease expired job and requeue.
+	Reaping(ctx context.Context) (err error)
+
+	// Free Lock
+	Free(ctx context.Context, key string) (err error)
+
+	// Func is called synchronously and Hit checks if its cached already.
+	Hit(ctx context.Context, handler string, key string, injson []byte) (meta JobInfo, outjson []byte, errjson []byte, err error)
+
+	// Function is called synchronously and then cache its result.
+	Done(ctx context.Context, handler string, meta *JobMeta, key string, injson []byte, outjson []byte, errjson []byte) (err error)
 
 	// Find completed job. (blocking)
 	Wait(ctx context.Context, key string, tw *twWheel) (meta JobInfo, outjson []byte, errjson []byte, err error)
@@ -510,32 +552,18 @@ type callStrategy interface {
 	// Find completed job. (non-blocking)
 	Result(ctx context.Context, key string) (meta JobInfo, outjson []byte, errjson []byte, err error)
 
-	// Push job to queue.
-	Enqueue(ctx context.Context, handler string, meta JobMeta, key string, injson []byte, delay_sec int) (enqueud bool, err error)
-
-	// Pull queued job.
-	Dequeue(ctx context.Context, handlers []string, lease_dur time.Duration) (key string, handler string, meta JobMeta, injson []byte, err error)
-
-	// Search lease expired job and requeue.
-	Reaping(ctx context.Context) (err error)
-
-	// Update lease time for dequeued job.
-	LeaseUpdate(ctx context.Context, key string, lease_dur time.Duration) (err error)
-
-	// Function is called asynchronously and then store its result.
-	DoneAsync(ctx context.Context, key string, ttl *time.Time, outjson []byte, errjson []byte) (err error)
-
-	// Delete queue.
-	Free(ctx context.Context, key string) (err error)
-
-	// Func is called synchronously and Hit checks if its cached already.
-	Hit(ctx context.Context, handler string, key string, injson []byte) (meta JobInfo, outjson []byte, errjson []byte, err error)
-
-	// Function is called synchronously and then cache its result.
-	Done(ctx context.Context, handler string, meta JobMeta, key string, injson []byte, outjson []byte, errjson []byte) (err error)
-
 	// List jobs
 	List(ctx context.Context, statuses []string, offset, limit int) ([]JobInfo, error)
+}
 
-	Requeue(ctx context.Context, key string, delay_sec int) error
+type JobTask interface {
+	Key() string
+	Handler() string
+	Meta() *JobMeta
+	Input() []byte
+
+	Success(ctx context.Context, ttl *time.Time, outjson []byte, errjson []byte) (err error)
+	Fail(ctx context.Context) (err error)
+	HeartBeat(ctx context.Context, lease_dur time.Duration) (err error)
+	Requeue(ctx context.Context, delay_sec int) error
 }

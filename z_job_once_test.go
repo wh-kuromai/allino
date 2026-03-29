@@ -2,6 +2,7 @@ package allino_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"sync/atomic"
@@ -14,11 +15,13 @@ import (
 func TestJobModeOnce(t *testing.T) {
 	atomic.StoreInt32(&handlers.OnceExecutionCount, 0)
 
-	s := allino.NewTestServer(nil)
+	//s := allino.NewTestServer(nil)
 
 	// ---- 1st call (should execute) ----
 	req1 := httptest.NewRequest("GET", "/api/oncetest?value=abc", nil)
-	resp1, _ := s.Fiber.Test(req1)
+	resp1, eee := s.Fiber.Test(req1)
+
+	fmt.Println("TestJobModeOnce", resp1, eee)
 
 	if resp1.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp1.StatusCode)

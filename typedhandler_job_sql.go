@@ -19,28 +19,54 @@ type callSQLStrategy struct {
 	issqlite bool
 	mu       sync.Mutex
 
-	handlers      *jobset
-	handlerOptMap map[string]*HandlerOption
+	lastDequeuedId atomic.Int64
+	waitInterval   time.Duration
+	waitTimeout    time.Duration
+	maxretry       int
+}
 
-	lastDequeuedId       atomic.Int64
-	dequeueThroughputEMA EMACalculator
-	lockedHandlers       *jobset
-	waitInterval         time.Duration
-	waitTimeout          time.Duration
-	maxretry             int
+type sqlJobTask struct {
+	strategy *callSQLStrategy
+	key      string
+	handler  string
+	meta     *JobMeta
+	input    []byte
+}
+
+func (t *sqlJobTask) Key() string {
+	return t.key
+}
+func (t *sqlJobTask) Handler() string {
+	return t.handler
+}
+func (t *sqlJobTask) Meta() *JobMeta {
+	return t.meta
+
+}
+func (t *sqlJobTask) Input() []byte {
+	return t.input
+}
+func (t *sqlJobTask) Success(ctx context.Context, ttl *time.Time, outjson []byte, errjson []byte) (err error) {
+	return t.strategy.doneAsync(ctx, t.key, ttl, outjson, errjson)
+}
+func (t *sqlJobTask) Fail(ctx context.Context) (err error) {
+	return t.strategy.Free(ctx, t.key)
+}
+func (t *sqlJobTask) HeartBeat(ctx context.Context, lease_dur time.Duration) (err error) {
+	return t.strategy.leaseUpdate(ctx, t.key, lease_dur)
+}
+func (t *sqlJobTask) Requeue(ctx context.Context, delay_sec int) error {
+	return t.strategy.requeue(ctx, t.key, delay_sec)
 }
 
 func newcallSQLStrategy(sv *Server) *callSQLStrategy {
 	s := &callSQLStrategy{
-		name:           "sql",
-		db:             sv.SQL,
-		issqlite:       false,
-		handlers:       newJobset(),
-		handlerOptMap:  make(map[string]*HandlerOption),
-		lockedHandlers: newJobset(),
-		waitInterval:   sv.Config.JobConfig.WaitInterval,
-		waitTimeout:    sv.Config.JobConfig.WaitTimeout,
-		maxretry:       sv.Config.JobConfig.MaxRetry,
+		name:         "sql",
+		db:           sv.SQL,
+		issqlite:     false,
+		waitInterval: sv.Config.JobConfig.WaitInterval,
+		waitTimeout:  sv.Config.JobConfig.WaitTimeout,
+		maxretry:     sv.Config.JobConfig.MaxRetry,
 	}
 
 	s.lastDequeuedId.Store(-1)
@@ -99,16 +125,10 @@ func (c *callSQLStrategy) Init(ctx context.Context) error {
 	return err
 }
 
-func (c *callSQLStrategy) Register(ctx context.Context, handler string, opt *HandlerOption) error {
-	c.handlers.Add(handler)
-	c.handlerOptMap[handler] = opt
-	return nil
-}
-
 func (c *callSQLStrategy) Enqueue(
 	ctx context.Context,
 	handler string,
-	meta JobMeta,
+	meta *JobMeta,
 	key string,
 	injson []byte,
 	delay_sec int,
@@ -168,19 +188,24 @@ func (c *callSQLStrategy) Dequeue(
 	ctx context.Context,
 	handlers []string,
 	leaseDuration time.Duration,
-) (key string, handler string, meta JobMeta, injson []byte, err error) {
+) (jt JobTask, err error) {
+	var key string
+	var handler string
+	var meta JobMeta
+	var injson []byte
+
 	if c.issqlite {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 	}
 
 	if len(handlers) == 0 {
-		return "", "", meta, nil, ErrJobNotFound
+		return nil, ErrJobNotFound
 	}
 
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", "", meta, nil, err
+		return nil, err
 	}
 	defer tx.Rollback()
 
@@ -239,13 +264,13 @@ RETURNING
 	); err != nil {
 		// UPDATE が 0件なら RETURNING も 0行 -> sql.ErrNoRows
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", "", meta, nil, ErrJobNotFound
+			return nil, ErrJobNotFound
 		}
-		return "", "", meta, nil, err
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return "", "", meta, nil, err
+		return nil, err
 	}
 
 	// Dequeue
@@ -257,10 +282,17 @@ RETURNING
 		cidv = id - lid
 	}
 
-	c.dequeueThroughputEMA.Update(float64(cidv))
+	jobManagerCache.dequeueThroughputEMA.Update(float64(cidv))
 	c.lastDequeuedId.Store(id)
 
-	return key, handler, meta, injson, nil
+	return &sqlJobTask{
+		strategy: c,
+		key:      key,
+		handler:  handler,
+		meta:     &meta,
+		input:    injson,
+	}, nil
+	//return key, handler, meta, injson, nil
 }
 
 func (c *callSQLStrategy) Reaping(
@@ -293,7 +325,7 @@ WHERE
 	return err
 }
 
-func (c *callSQLStrategy) LeaseUpdate(ctx context.Context, key string, lease_dur time.Duration) (err error) {
+func (c *callSQLStrategy) leaseUpdate(ctx context.Context, key string, lease_dur time.Duration) (err error) {
 	if c.issqlite {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -312,7 +344,7 @@ func (c *callSQLStrategy) LeaseUpdate(ctx context.Context, key string, lease_dur
 	return err
 }
 
-func (c *callSQLStrategy) DoneAsync(
+func (c *callSQLStrategy) doneAsync(
 	ctx context.Context,
 	key string,
 	ttl *time.Time,
@@ -391,7 +423,7 @@ func (c *callSQLStrategy) Result(
 	}
 
 	if status != "done" && status != "error" {
-		return ji, nil, nil, NewJobNotFinishedError(key)
+		return ji, nil, nil, NewJobPendingError(key, "job not finished yet")
 	}
 
 	return ji, out, errb, nil
@@ -475,10 +507,7 @@ func (c *callSQLStrategy) Hit(
 	}
 
 	if ji.Meta.Status != "done" && ji.Meta.Status != "error" {
-		return ji, nil, nil, &JobAcceptedError{
-			JobID: key,
-			Msg:   "job not finished yet",
-		}
+		return ji, nil, nil, NewJobPendingError(key, "job not finished yet")
 	}
 
 	now := time.Now()
@@ -492,7 +521,7 @@ func (c *callSQLStrategy) Hit(
 func (c *callSQLStrategy) Done(
 	ctx context.Context,
 	handler string,
-	meta JobMeta,
+	meta *JobMeta,
 	key string,
 	injson []byte,
 	outjson []byte,
@@ -599,7 +628,7 @@ func (c *callSQLStrategy) List(
 	return jobinfos, nil
 }
 
-func (c *callSQLStrategy) Requeue(ctx context.Context, key string, delay_sec int) error {
+func (c *callSQLStrategy) requeue(ctx context.Context, key string, delay_sec int) error {
 	if c.issqlite {
 		c.mu.Lock()
 		defer c.mu.Unlock()

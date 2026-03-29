@@ -88,3 +88,36 @@ func fillSelfDiscovery(target any) error {
 	}
 	return nil
 }
+
+var (
+	sdType = reflect.TypeOf((*SelfDiscovery)(nil)).Elem()
+)
+
+func hasSelfDiscovery(t reflect.Type) bool {
+
+	// 1. その型自体、またはそのポインタ型がインターフェースを実装しているかチェック
+	if t.Implements(sdType) || reflect.PtrTo(t).Implements(sdType) {
+		return true
+	}
+
+	// 2. 複合型（ポインタ、スライス、マップ）の場合は、その中身をチェック
+	switch t.Kind() {
+	case reflect.Ptr, reflect.Slice, reflect.Array, reflect.Map:
+		if hasSelfDiscovery(t.Elem()) {
+			return true
+		}
+
+	case reflect.Struct:
+		// 3. 構造体の場合は全フィールドをスキャン
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			// フィールドの型を再帰的にチェック
+			if hasSelfDiscovery(field.Type) {
+				return true
+			}
+		}
+	}
+
+	// 何も見つからなかった場合
+	return false
+}

@@ -160,33 +160,25 @@ var ErrJobErrorDecodeFailed = NewError("failed to decode job error")
 var ErrJobInputEncodeFailed = NewError("failed to encode job input")
 var ErrJobInputDecodeFailed = NewError("failed to decode job input")
 
-type JobAcceptedError struct {
+type JobPendingError struct {
 	Status int    `json:"-"`
 	JobID  string `json:"jobid,omitempty"`
 	Msg    string `json:"msg,omitempty"`
 }
 
-func (e JobAcceptedError) StatusCode() int {
+func (e JobPendingError) StatusCode() int {
 	return e.Status
 }
 
-func (e JobAcceptedError) Error() string {
+func (e JobPendingError) Error() string {
 	return e.Msg
 }
 
-type JobNotFinishedError struct {
-	JobID string `json:"jobid,omitempty"`
-	Msg   string `json:"msg,omitempty"`
-}
-
-func (e JobNotFinishedError) Error() string {
-	return e.Msg
-}
-
-func NewJobNotFinishedError(key string) *JobNotFinishedError {
-	return &JobNotFinishedError{
-		JobID: key,
-		Msg:   "job not finished yet",
+func NewJobPendingError(key, msg string) *JobPendingError {
+	return &JobPendingError{
+		Status: 202,
+		JobID:  key,
+		Msg:    msg,
 	}
 }
 

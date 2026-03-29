@@ -17,7 +17,7 @@ type jobExecutionContext struct {
 	inJSONMarshaled bool
 }
 
-func (c *jobExecutionContext) JobMeta(status string) JobMeta {
+func (c *jobExecutionContext) JobMeta(status string) *JobMeta {
 	meta := JobMeta{
 		Version:  handlerVersion(c.opt),
 		Status:   status,
@@ -30,7 +30,7 @@ func (c *jobExecutionContext) JobMeta(status string) JobMeta {
 		ttl := time.Now().Add(c.opt.Job.CacheExpire)
 		meta.TTL = &ttl
 	}
-	return meta
+	return &meta
 }
 
 func (c *jobExecutionContext) MarshalCheck() error {

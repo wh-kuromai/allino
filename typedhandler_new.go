@@ -58,10 +58,11 @@ type HandlerOption struct {
 	parsedTemplate *template.Template
 	consumer       jobconsumer
 
-	inputType  reflect.Type
-	outputType reflect.Type
-	errorType  reflect.Type
-	eiserror   bool
+	inputType        reflect.Type
+	outputType       reflect.Type
+	errorType        reflect.Type
+	eiserror         bool
+	hasSelfDiscovery bool
 
 	lastRun *time.Time
 	exts    *sync.Map

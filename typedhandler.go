@@ -326,6 +326,7 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 	if options.Name != "" {
 		handlerMarshalMap[encodeHandlerName(options)] = rw
 	}
+	options.hasSelfDiscovery = hasSelfDiscovery(reflect.TypeOf(t).Elem())
 	options.consumer = rw.job_consume
 
 	typedHandlerList = append(typedHandlerList, rw)
