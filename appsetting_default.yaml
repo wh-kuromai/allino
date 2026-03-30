@@ -52,7 +52,7 @@ log:
       loglevel: debug
 job:
   concurrency: 5
-  idle_interval: 300ms
+  idle_interval: 1000ms
   lease_duration: 20s
   requeue_interval: 10s
   wait_interval: 700ms

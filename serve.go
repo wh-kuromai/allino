@@ -104,6 +104,8 @@ type Server struct {
 	forcecancel context.CancelFunc
 	taskwheel   *twWheel
 	//runAsPlugin bool
+
+	jobManagerCache *jobManager
 }
 
 var callSQLstrategy *callSQLStrategy

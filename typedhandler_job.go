@@ -56,13 +56,6 @@ type JobConf struct {
 type JobOpt struct {
 }
 
-var jobManagerCache = &jobManager{
-	handlers:             newJobset(),
-	handlerOptMap:        make(map[string]*HandlerOption),
-	lockedHandlers:       newJobset(),
-	dequeueThroughputEMA: NewEMACalculator(0.3),
-}
-
 type jobManager struct {
 	handlers             *jobset
 	handlerOptMap        map[string]*HandlerOption
@@ -96,6 +89,14 @@ var JobExtension = NewExtension[JobConf, JobOpt](
 
 			if opt.JobMode != "" {
 				//hbackend := mergeSingle(s.Config.JobConfig.Backend, opt.Job.Backend)
+				if s.jobManagerCache == nil {
+					s.jobManagerCache = &jobManager{
+						handlers:             newJobset(),
+						handlerOptMap:        make(map[string]*HandlerOption),
+						lockedHandlers:       newJobset(),
+						dequeueThroughputEMA: NewEMACalculator(0.3),
+					}
+				}
 
 				if callSQLstrategy == nil {
 					callSQLstrategy = newcallSQLStrategy(s)
@@ -115,9 +116,10 @@ var JobExtension = NewExtension[JobConf, JobOpt](
 						return true
 					})
 				}
+
 				opt.Job.callstrategy = callSQLstrategy
-				jobManagerCache.handlers.Add(encodeHandlerName(opt))
-				jobManagerCache.handlerOptMap[encodeHandlerName(opt)] = opt
+				s.jobManagerCache.handlers.Add(encodeHandlerName(opt))
+				s.jobManagerCache.handlerOptMap[encodeHandlerName(opt)] = opt
 			}
 
 			return nil
@@ -130,12 +132,15 @@ var JobExtension = NewExtension[JobConf, JobOpt](
 )
 
 func strategyWorkerInit(s callStrategy, sv *Server) {
-	idleit := sv.Config.JobConfig.IdleInterval
+	//idleit := sv.Config.JobConfig.IdleInterval
 	//leasesec := int(mergeSingle(sv.Config.JobConfig.LeaseSeconds, opt.Job.LeaseSeconds).Seconds())
 
 	leaset := sv.Config.JobConfig.LeaseDuration
 
 	jobchan := make(chan JobTask, sv.Config.JobConfig.Concurrency*2)
+
+	backoff := NewBackoff(100*time.Millisecond, sv.Config.JobConfig.IdleInterval)
+	attempt := 0
 
 	go func() {
 		for {
@@ -143,36 +148,31 @@ func strategyWorkerInit(s callStrategy, sv *Server) {
 			case <-sv.appctx.Done():
 				return
 			default:
-				hs := jobManagerCache.handlers.Diff(jobManagerCache.lockedHandlers)
-				jtask, err := s.Dequeue(sv.appctx, hs, leaset)
+				hs := sv.jobManagerCache.handlers.Diff(sv.jobManagerCache.lockedHandlers)
+				jtask, err := s.Dequeue(sv.appctx, hs, leaset, sv.jobManagerCache.dequeueThroughputEMA)
 				if err != nil {
 					if !errors.Is(err, ErrJobNotFound) {
 						sv.Logger.Error("job system error", zap.String("component", "dequeue"), zap.Error(err))
 					}
-					time.Sleep(idleit)
+
+					attempt++
+					wait := backoff.Duration(attempt)
+					time.Sleep(wait)
 					continue
 				}
 
-				//jt := jobTask{
-				//	key:      jtask.Key(),
-				//	backend:  s.name,
-				//	handler:  jtask.Handler(),
-				//	injson:   jtask.Input(),
-				//	parentid: jtask.Key(),
-				//	rootid:   jtask.Meta().RootID,
-				//}
-				//
 				jtask.Meta().ParentID = jtask.Key()
 				if jtask.Meta().RootID == "" {
 					jtask.Meta().RootID = jtask.Key()
 				}
 
 				// if dequeued need handler lock,
-				opt := jobManagerCache.handlerOptMap[jtask.Handler()]
+				opt := sv.jobManagerCache.handlerOptMap[jtask.Handler()]
 				if opt.Job.Interval != 0 {
-					jobManagerCache.lockedHandlers.Add(jtask.Handler())
+					sv.jobManagerCache.lockedHandlers.Add(jtask.Handler())
 				}
 
+				attempt = 0
 				jobchan <- jtask
 			}
 		}
@@ -187,13 +187,13 @@ func strategyWorkerInit(s callStrategy, sv *Server) {
 					return
 				case jtask := <-jobchan:
 					now := time.Now()
-					opt := jobManagerCache.handlerOptMap[jtask.Handler()]
+					opt := sv.jobManagerCache.handlerOptMap[jtask.Handler()]
 
 					// check if need to re-dispatch
 					needDispatch := false
 					var waitDur time.Duration
 					if opt.Job.Interval != 0 && opt.lastRun != nil {
-						waitDur = time.Until((*opt.lastRun).Add(time.Duration(float64(opt.Job.Interval) * jobManagerCache.dequeueThroughputEMA.CurrentAverage)))
+						waitDur = time.Until((*opt.lastRun).Add(time.Duration(float64(opt.Job.Interval) * sv.jobManagerCache.dequeueThroughputEMA.CurrentAverage)))
 						if waitDur > 0 {
 							needDispatch = true
 						}
@@ -271,7 +271,7 @@ func strategyWorkerInit(s callStrategy, sv *Server) {
 						}
 						task.Cancel()
 						if needDispatch {
-							jobManagerCache.lockedHandlers.Remove(jtask.Handler())
+							sv.jobManagerCache.lockedHandlers.Remove(jtask.Handler())
 							opt.lastRun = &now
 						}
 						return false
@@ -281,7 +281,7 @@ func strategyWorkerInit(s callStrategy, sv *Server) {
 						sv.taskwheel.Add(waitDur, fn)
 					} else {
 						fn()
-						jobManagerCache.lockedHandlers.Remove(jtask.Handler())
+						sv.jobManagerCache.lockedHandlers.Remove(jtask.Handler())
 						opt.lastRun = &now
 					}
 				}
@@ -390,35 +390,45 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 		}
 
 		if !aquiredLock {
+			if cacheExec {
+				output, err, syserr = unmarshalfn(opt.Job.callstrategy.Hit(r.Context(), jec.Handler(), jec.JobID(), jec.InputJSON()))
+				if syserr == nil {
+					return output, err
+				}
+
+				// if job is not finished, wait it
+				jnferr, ok := syserr.(*JobPendingError)
+				if ok {
+					output, err, syserr = unmarshalfn(opt.Job.callstrategy.Wait(r.Context(), jnferr.JobID, r.cache.taskwheel))
+					if syserr == nil {
+						return output, err
+					}
+				}
+
+				if !r.config.Log.Silent {
+					r.logger.Info("job lost", zap.String("handler", jec.Handler()), zap.Error(syserr))
+				}
+				return zeroU, FatalBackendError.With(syserr)
+				// cache not found or expired
+			}
 			// if enqueued failed & dedupe, exec declined.
 			if !r.config.Log.Silent {
 				r.logger.Info("job duplicated", zap.String("handler", jec.Handler()))
 			}
 			return zeroU, ErrJobDuplicated
 		}
-	}
 
-	// wait if memoized
-	if !aquiredLock && dedupeExec && cacheExec {
-		output, err, syserr = unmarshalfn(opt.Job.callstrategy.Hit(r.Context(), jec.Handler(), jec.JobID(), jec.InputJSON()))
-		if syserr == nil {
-			return output, err
-		}
-
-		// if job is not finished, wait it
-		jnferr, ok := syserr.(*JobPendingError)
-		if ok {
-			output, err, syserr = unmarshalfn(opt.Job.callstrategy.Wait(r.Context(), jnferr.JobID, r.cache.taskwheel))
-			if syserr == nil {
-				return output, err
+		// Lock aquired
+		leaset := r.config.JobConfig.LeaseDuration
+		task := r.cache.taskwheel.Add(time.Duration(leaset/2), func() bool {
+			err := opt.Job.callstrategy.LeaseUpdate(r.Context(), jec.JobID(), leaset)
+			//err := s.LeaseUpdate(sv.appctx, jobn.key, leaset)
+			if err != nil && !r.Config().Log.Silent {
+				r.logger.Info("job system error", zap.String("component", "leaseupdate"), zap.Error(err))
 			}
-		}
-
-		if !r.config.Log.Silent {
-			r.logger.Info("job lost", zap.String("handler", jec.Handler()), zap.Error(syserr))
-		}
-		return zeroU, FatalBackendError.With(syserr)
-		// cache not found or expired
+			return true
+		})
+		defer task.Cancel()
 	}
 
 	output, err = rw.handlefunc(r, input)
@@ -532,13 +542,16 @@ type callStrategy interface {
 	Enqueue(ctx context.Context, handler string, meta *JobMeta, key string, injson []byte, delay_sec int) (enqueud bool, err error)
 
 	// Pull queued job.
-	Dequeue(ctx context.Context, handlers []string, lease_dur time.Duration) (jt JobTask, err error)
+	Dequeue(ctx context.Context, handlers []string, lease_dur time.Duration, ema *EMACalculator) (jt JobTask, err error)
 
 	// Search lease expired job and requeue.
 	Reaping(ctx context.Context) (err error)
 
 	// Free Lock
 	Free(ctx context.Context, key string) (err error)
+
+	//
+	LeaseUpdate(ctx context.Context, key string, lease_dur time.Duration) (err error)
 
 	// Func is called synchronously and Hit checks if its cached already.
 	Hit(ctx context.Context, handler string, key string, injson []byte) (meta JobInfo, outjson []byte, errjson []byte, err error)

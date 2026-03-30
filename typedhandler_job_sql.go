@@ -53,7 +53,7 @@ func (t *sqlJobTask) Fail(ctx context.Context) (err error) {
 	return t.strategy.Free(ctx, t.key)
 }
 func (t *sqlJobTask) HeartBeat(ctx context.Context, lease_dur time.Duration) (err error) {
-	return t.strategy.leaseUpdate(ctx, t.key, lease_dur)
+	return t.strategy.LeaseUpdate(ctx, t.key, lease_dur)
 }
 func (t *sqlJobTask) Requeue(ctx context.Context, delay_sec int) error {
 	return t.strategy.requeue(ctx, t.key, delay_sec)
@@ -188,6 +188,7 @@ func (c *callSQLStrategy) Dequeue(
 	ctx context.Context,
 	handlers []string,
 	leaseDuration time.Duration,
+	ema *EMACalculator,
 ) (jt JobTask, err error) {
 	var key string
 	var handler string
@@ -232,6 +233,12 @@ func (c *callSQLStrategy) Dequeue(
 		args = append(args, h) // handler IN (...)
 	}
 
+	optimizeWhere := ""
+
+	if !c.issqlite {
+		optimizeWhere = "FOR UPDATE SKIP LOCKED"
+	}
+
 	// ✅ UPDATE で 1件だけ lease して、その行を RETURNING で回収（これが超重要）
 	q := fmt.Sprintf(`
 UPDATE executions
@@ -245,10 +252,11 @@ WHERE id = (
   WHERE status = 'queued' AND run_at <= ? AND handler IN (%s)
   ORDER BY priority DESC, created_at ASC, id ASC
   LIMIT 1
+	%s
 )
 RETURNING
   id, key, handler, version, status, parentid, rootid, input
-`, strings.Join(placeholders, ","))
+`, strings.Join(placeholders, ","), optimizeWhere)
 
 	row := tx.QueryRowContext(ctx, q, args...)
 	var id int64
@@ -282,7 +290,7 @@ RETURNING
 		cidv = id - lid
 	}
 
-	jobManagerCache.dequeueThroughputEMA.Update(float64(cidv))
+	ema.Update(float64(cidv))
 	c.lastDequeuedId.Store(id)
 
 	return &sqlJobTask{
@@ -320,12 +328,17 @@ SET
 WHERE 
     status = 'leased' 
     AND leased_until < ?; -- 期限切れのジョブのみ対象
+
+DELETE FROM executions
+WHERE (status = 'done' OR status = 'error')
+	AND ttl IS NOT NULL
+	AND ttl < ?
 	`, now, now, c.maxretry, now, now)
 
 	return err
 }
 
-func (c *callSQLStrategy) leaseUpdate(ctx context.Context, key string, lease_dur time.Duration) (err error) {
+func (c *callSQLStrategy) LeaseUpdate(ctx context.Context, key string, lease_dur time.Duration) (err error) {
 	if c.issqlite {
 		c.mu.Lock()
 		defer c.mu.Unlock()

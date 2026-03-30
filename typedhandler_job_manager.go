@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -271,4 +273,49 @@ func normalizeError(err error) any {
 		return NewError(err.Error())
 	}
 	return err
+}
+
+type Backoff struct {
+	Min    time.Duration // 最小待ち時間 (例: 100ms)
+	Max    time.Duration // 最大待ち時間 (例: 30s)
+	Factor float64       // 倍率 (通常 2.0)
+	jitter bool
+}
+
+func NewBackoff(min, max time.Duration) *Backoff {
+	return &Backoff{
+		Min:    min,
+		Max:    max,
+		Factor: 2.0,
+		jitter: true,
+	}
+}
+
+// Duration は現在の試行回数に応じた待ち時間を返す
+func (b *Backoff) Duration(attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+
+	// 指数計算: min * (factor ^ attempt)
+	dur := float64(b.Min) * math.Pow(b.Factor, float64(attempt))
+
+	d := time.Duration(dur)
+
+	// 最大値でキャップ
+	if d > b.Max {
+		d = b.Max
+	}
+
+	// Jitter を加える (0 ～ d の間でランダム)
+	if b.jitter && d > 0 {
+		d = time.Duration(rand.Int63n(int64(d)))
+	}
+
+	// 最小値を下回らないようにする
+	if d < b.Min {
+		return b.Min
+	}
+
+	return d
 }
