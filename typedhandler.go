@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"html/template"
 	"reflect"
+	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 
@@ -83,6 +85,10 @@ func (s *Server) RegisterAllTypedHandler() {
 
 func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r *Request, input T) (output U, err E)) *GenericTypedHandler[T, U, E] {
 	options := &option
+	if options.Package == "" {
+		options.Package, _ = findExternalCaller([]string{"github.com/wh-kuromai/allino"})
+	}
+
 	if options.Method == "" {
 		options.Method = "GET"
 	}
@@ -97,10 +103,23 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 		options.RedirectStatusCode = 302
 	}
 
+	tpool := NewReflectPool[T]()
+	upool := NewReflectPool[U]()
+	epool := NewReflectPool[E]()
+
 	var tDefault T
-	tDefault = NewRefOf[T](func(a any) {
-		setDefault(a)
+	var err error
+	tDefault, err = tpool.New(func(a any) error {
+		return setDefault(a)
 	})
+	if err != nil {
+		panic("set default error: " + err.Error())
+	}
+
+	//var tDefault T
+	//tDefault = NewRefOf[T](func(a any) {
+	//	setDefault(a)
+	//})
 
 	/*
 		var tDefault T
@@ -123,9 +142,9 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 	var u *U
 	var k *E
 	var newParamFn func() T
-	var inputReflectPlan *reflectPlan
+	//var inputReflectPlan *reflectPlan
 
-	if options.NoWrapJSON {
+	if options.NoWrapJSON || options.ContentType != JSON {
 		options.outputType = reflect.TypeOf(u).Elem()
 		options.errorType = reflect.TypeOf(k).Elem()
 	} else {
@@ -135,7 +154,7 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 		options.errorType = reflect.TypeOf(ew).Elem()
 	}
 	options.inputType = reflect.TypeOf(t).Elem()
-	inputReflectPlan = buildPlan(option.inputType)
+	options.inputReflectPlan = buildPlan(option.inputType)
 
 	if reflect.TypeOf(k).Elem() == reflect.TypeOf((*error)(nil)).Elem() {
 		options.eiserror = true
@@ -169,6 +188,9 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 	var rw *GenericTypedHandler[T, U, E]
 	rw = &GenericTypedHandler[T, U, E]{
 		options:    options,
+		tpool:      tpool,
+		upool:      upool,
+		epool:      epool,
 		handlefunc: handlefunc,
 		handler: func(r *Request) {
 			if options.ContentType != "" {
@@ -180,11 +202,11 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 			// instantiate param if it is a pointer type
 			if newParamFn != nil {
 				param = newParamFn()
-				err = r.getAll(param, inputReflectPlan)
+				err = r.getAll(param, options.inputReflectPlan)
 			} else {
 				param = tDefault
 				//fmt.Print(param)
-				err = r.getAll(&param, inputReflectPlan)
+				err = r.getAll(&param, options.inputReflectPlan)
 			}
 			//if options.inputType.Kind() == reflect.Ptr {
 			//	param = reflect.New(options.inputType.Elem()).Interface().(T)
@@ -202,7 +224,7 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 				}
 
 				if err == nil && !consumed {
-					for _, ext := range r.cache.extopts {
+					for _, ext := range r.server.extopts {
 						if err == nil && !consumed && ext.RequestHandler != nil {
 							consumed, err = ext.RequestHandler(r, options, param)
 						}
@@ -211,7 +233,19 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 
 				r.cache.input = param
 				if err == nil && !consumed {
-					resp, err = rw.call_internal(r, param, false)
+
+					func() {
+						defer func() {
+							// recover needed.
+							if rcv := recover(); rcv != nil {
+
+								r.logger.Warn("panic on handler", zap.Any("stack", rcv), zap.String("debug", string(debug.Stack())))
+								err = ErrServerError
+							}
+						}()
+
+						resp, err = rw.call_internal(r, param, false)
+					}()
 					//consumed, resp, err = cachedHandleFunc(r, handlefunc, options, param)
 					//if !consumed {
 					//	resp, err = handlefunc(r, param)
@@ -263,7 +297,7 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 
 			// Response
 			if !isReallyNil(err) {
-				for _, ext := range r.cache.extopts {
+				for _, ext := range r.server.extopts {
 					if ext.ErrorHandler != nil {
 						ok := ext.ErrorHandler(r, options, err)
 						if ok {
@@ -293,7 +327,7 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 				return
 			}
 
-			for _, ext := range r.cache.extopts {
+			for _, ext := range r.server.extopts {
 				if ext.ResponseHandler != nil {
 					ok := ext.ResponseHandler(r, options, resp)
 					if ok {
@@ -333,6 +367,8 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 	return rw
 }
 
+var ErrServerError = NewCodeError(500, "server_error", "server error")
+
 func IsAny[T any]() bool {
 	var t *T
 	var a *any
@@ -345,6 +381,10 @@ type GenericTypedHandler[T, U any, E error] struct {
 	options    *HandlerOption
 	handlefunc func(r *Request, input T) (output U, err E)
 	handler    func(r *Request)
+
+	tpool *ReflectPool[T]
+	upool *ReflectPool[U]
+	epool *ReflectPool[E]
 
 	// for SelfDiscovery
 	Handler string `json:"handler"`
@@ -372,7 +412,7 @@ func (rw *GenericTypedHandler[T, U, E]) Call(r *Request, input T) (output U, err
 	}
 
 	if !r.config.System.DisableValidator {
-		if err := r.cache.validator.Struct(input); err != nil {
+		if err := r.server.Validator.Struct(input); err != nil {
 			var zeroU U
 			return zeroU, err
 		}
@@ -382,11 +422,34 @@ func (rw *GenericTypedHandler[T, U, E]) Call(r *Request, input T) (output U, err
 	return
 }
 
+func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromcall bool) (output U, err error) {
+	if rw.options.Session.Type != "" {
+		return rw.call_session(r, input, fromcall)
+	}
+
+	if rw.options != nil &&
+		((fromcall && rw.options.Job.Async) ||
+			rw.options.Job.Dedupe ||
+			rw.options.Job.Cache ||
+			r.memo.jobabortctrl != "") {
+
+		return rw.call_job(r, input, fromcall)
+	}
+
+	return rw.handlefunc(r, input)
+}
+
 func (rw *GenericTypedHandler[T, U, E]) NewInputWithDefault() T {
-	var t T
-	t = NewRefOf[T](func(a any) {
-		setDefault(a)
+	t, err := rw.tpool.New(func(a any) error {
+		return setDefault(a)
 	})
+	if err != nil {
+		panic("set default error: " + err.Error())
+	}
+	//var t T
+	//t = NewRefOf[T](func(a any) {
+	//	setDefault(a)
+	//})
 	return t
 }
 
@@ -482,4 +545,57 @@ func init() {
 			r.errorJSON(options.ErrorStatusCode, options.NoWrapJSON, options.eiserror, err)
 		},
 	}
+}
+
+func findExternalCaller(excludePrefixes []string) (string, string) {
+	pcs := make([]uintptr, 16)
+
+	// skip=2:
+	// 0: runtime.Callers
+	// 1: FindExternalCaller
+	// 2: 呼び出し元からスタート
+	n := runtime.Callers(2, pcs)
+
+	frames := runtime.CallersFrames(pcs[:n])
+
+	for {
+		frame, more := frames.Next()
+
+		fn := frame.Function // フルパス付き関数名
+
+		if fn == "" {
+			if !more {
+				break
+			}
+			continue
+		}
+
+		// prefixチェック
+		skip := false
+		for _, p := range excludePrefixes {
+			if strings.HasPrefix(fn, p) {
+				skip = true
+				break
+			}
+		}
+
+		if !skip {
+			return cleanPkg(fn), frame.File
+		}
+
+		if !more {
+			break
+		}
+	}
+
+	return "", ""
+}
+
+func cleanPkg(pkg string) string {
+
+	idx := strings.Index(pkg, ".")
+	if idx > 0 {
+		pkg = pkg[:idx]
+	}
+	return pkg
 }

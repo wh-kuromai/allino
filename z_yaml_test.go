@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/goccy/go-yaml"
+	"github.com/wh-kuromai/allino"
 )
 
 type ByteSize int64
@@ -88,4 +89,72 @@ dur: 1h12m
 	}
 	fmt.Println("_----_", cfg)
 	fmt.Println("_----_", cfg.Dur.Minutes())
+}
+
+type TestConfig struct {
+	Field1 string `yaml:"field1"`
+	Field2 int    `yaml:"field2"`
+}
+
+func TestParseInner_Success(t *testing.T) {
+	yamlData := []byte(`
+extension:
+  field1: "hello"
+  field2: 42
+`)
+
+	var cfg TestConfig
+	err := allino.YAMLPathUnmarshal(yamlData, "$.extension", &cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Field1 != "hello" {
+		t.Errorf("Field1 mismatch: got %s", cfg.Field1)
+	}
+
+	if cfg.Field2 != 42 {
+		t.Errorf("Field2 mismatch: got %d", cfg.Field2)
+	}
+}
+
+func TestParseInner_KeyNotFound(t *testing.T) {
+	yamlData := []byte(`
+other:
+  field1: "hello"
+`)
+
+	var cfg TestConfig
+	err := allino.YAMLPathUnmarshal(yamlData, "$.extension", &cfg)
+	if err == nil {
+		t.Fatal("expected error but got nil")
+	}
+}
+
+func TestParseInner_InvalidYAML(t *testing.T) {
+	yamlData := []byte(`
+extension:
+  field1: "hello
+  field2: 42
+`) // クォート閉じてない
+
+	var cfg TestConfig
+	err := allino.YAMLPathUnmarshal(yamlData, "$.extension", &cfg)
+	if err == nil {
+		t.Fatal("expected error but got nil")
+	}
+}
+
+func TestParseInner_TypeMismatch(t *testing.T) {
+	yamlData := []byte(`
+extension:
+  field1: "hello"
+  field2: "not a number"
+`)
+
+	var cfg TestConfig
+	err := allino.YAMLPathUnmarshal(yamlData, "$.extension", &cfg)
+	if err == nil {
+		t.Fatal("expected error but got nil")
+	}
 }

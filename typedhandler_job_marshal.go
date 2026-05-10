@@ -7,11 +7,13 @@ import (
 
 type genericHandlerJSON struct {
 	Handler string `json:"handler"`
+	Version string `json:"version"`
 }
 
 func (rw *GenericTypedHandler[T, U, E]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&genericHandlerJSON{
 		Handler: encodeHandlerName(rw.options),
+		Version: handlerVersion(rw.options),
 	})
 }
 

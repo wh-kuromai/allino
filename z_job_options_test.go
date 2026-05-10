@@ -57,7 +57,7 @@ func TestJobModeInterval(t *testing.T) {
 	req1 := httptest.NewRequest("GET", "/api/intervaltest?value=abc"+id, nil)
 	s.Fiber.Test(req1)
 
-	time.Sleep(2000 * time.Millisecond)
+	time.Sleep(time.Second)
 
 	if atomic.LoadInt32(&handlers.IntervalExecutionCount) != 1 {
 		t.Fatalf("worker should run once: %d", handlers.IntervalExecutionCount)
@@ -68,20 +68,20 @@ func TestJobModeInterval(t *testing.T) {
 	req2 := httptest.NewRequest("GET", "/api/intervaltest?value=abc"+id, nil)
 	s.Fiber.Test(req2)
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(time.Second)
 
 	if atomic.LoadInt32(&handlers.IntervalExecutionCount) != 1 {
 		t.Fatalf("worker should not run again within interval: %d", handlers.IntervalExecutionCount)
 	}
 
 	// Interval後
-	time.Sleep(2 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	id = xid.New().String()
 	req3 := httptest.NewRequest("GET", "/api/intervaltest?value=abc"+id, nil)
 	s.Fiber.Test(req3)
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(time.Second)
 
 	if atomic.LoadInt32(&handlers.IntervalExecutionCount) != 3 {
 		t.Fatalf("worker should run again after interval: %d", handlers.IntervalExecutionCount)

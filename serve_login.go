@@ -8,6 +8,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/valyala/fasthttp"
 	"github.com/wh-kuromai/cryptino"
 	"go.uber.org/zap"
 )
@@ -42,12 +43,49 @@ type OAuthConfig struct {
 
 type CookieConfig struct {
 	Name        string        `json:"name"`
+	Path        string        `json:"path"`
+	Domain      string        `json:"domain"`
 	Expire      time.Duration `json:"expire"`
 	Secure      bool          `json:"secure"`
 	Httponly    bool          `json:"httponly"`
 	SameSite    string        `json:"samesite"`
-	Path        string        `json:"path"`
 	JWTAudience string        `json:"jwt_audience"`
+}
+
+func (c *CookieConfig) ToFiberCookie(value string) *fiber.Cookie {
+	// set cookie for storing token
+	return &fiber.Cookie{
+		Name:     c.Name,
+		Value:    value,
+		Path:     c.Path,
+		Domain:   c.Domain,
+		Expires:  time.Now().Add(c.Expire),
+		Secure:   c.Secure,
+		HTTPOnly: c.Httponly,
+		SameSite: c.SameSite,
+	}
+}
+
+func (c *CookieConfig) ToFasthttpCookie(value string) *fasthttp.Cookie {
+	cookie := &fasthttp.Cookie{}
+	cookie.SetKey(c.Name)
+	if value != "" {
+		cookie.SetValue(value)
+	}
+	cookie.SetPath(c.Path)
+	cookie.SetDomain(c.Domain)
+	cookie.SetExpire(time.Now().Add(c.Expire))
+	cookie.SetHTTPOnly(c.Httponly)
+	cookie.SetSecure(c.Secure)
+	switch strings.ToLower(c.SameSite) {
+	case "strict":
+		cookie.SetSameSite(fasthttp.CookieSameSiteStrictMode)
+	case "lax":
+		cookie.SetSameSite(fasthttp.CookieSameSiteLaxMode)
+	case "none":
+		cookie.SetSameSite(fasthttp.CookieSameSiteNoneMode)
+	}
+	return cookie
 }
 
 var (
@@ -219,6 +257,7 @@ func (r *Request) SessionID() string {
 	if r.cache.sessionid != "" {
 		return r.cache.sessionid
 	}
+
 	guestcookie := r.fiber.Cookies(r.config.Login.GuestCookie.Name)
 	//r.Log.Print(loghub.TRACE, "cookie:", cookie, err)
 
@@ -229,7 +268,7 @@ func (r *Request) SessionID() string {
 			if err == nil {
 				if cookiejwt.Body.Audience == r.config.Login.GuestCookie.JWTAudience {
 					r.cache.sessionid = cookiejwt.Body.Subject
-					r.cache.guestcookiefound = true
+					//r.cache.guestcookiefound = true
 				}
 			}
 		}
@@ -315,17 +354,7 @@ func IssueLoginCookie(r *Request, uid, name string, custom ...map[string]any) *f
 		return nil
 	}
 
-	// set cookie for storing token
-	cookie := &fiber.Cookie{
-		Name:     r.config.Login.LoginCookie.Name,
-		Value:    string(jwtbuf),
-		Expires:  time.Now().Add(r.config.Login.LoginCookie.Expire * time.Second),
-		Secure:   r.config.Login.LoginCookie.Secure,
-		SameSite: r.config.Login.LoginCookie.SameSite,
-		HTTPOnly: r.config.Login.LoginCookie.Httponly,
-		Path:     r.config.Login.LoginCookie.Path,
-	}
-	return cookie
+	return r.config.Login.LoginCookie.ToFiberCookie(string(jwtbuf))
 }
 
 func IssueGuestCookie(r *Request) *fiber.Cookie {
@@ -339,15 +368,5 @@ func IssueGuestCookie(r *Request) *fiber.Cookie {
 		return nil
 	}
 
-	// set cookie for storing token
-	cookie := &fiber.Cookie{
-		Name:     r.config.Login.GuestCookie.Name,
-		Value:    string(jwtbuf),
-		Expires:  time.Now().Add(r.config.Login.GuestCookie.Expire * time.Second),
-		Secure:   r.config.Login.GuestCookie.Secure,
-		SameSite: r.config.Login.GuestCookie.SameSite,
-		HTTPOnly: r.config.Login.GuestCookie.Httponly,
-		Path:     r.config.Login.GuestCookie.Path,
-	}
-	return cookie
+	return r.config.Login.GuestCookie.ToFiberCookie(string(jwtbuf))
 }

@@ -50,6 +50,9 @@ log:
   errorlog:
     - to: stdout
       loglevel: debug
+timewheel:
+  slots: 32
+  tick_interval: 100ms
 job:
   concurrency: 5
   idle_interval: 1000ms

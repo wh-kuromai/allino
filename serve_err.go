@@ -12,6 +12,18 @@ type FiberHandler interface {
 	HandleFiber(w *fiber.Ctx)
 }
 
+var ErrNoOp error = &noOpError{}
+
+type noOpError struct {
+}
+
+func (e *noOpError) Error() string {
+	return ""
+}
+
+func (e *noOpError) HandleFiber(w *fiber.Ctx) {
+}
+
 type RedirectError struct {
 	StatusCode int
 	Location   string
@@ -145,6 +157,7 @@ func (r *Request) errorRedirect(statusCode int, err error) {
 
 func (r *Request) errorJSON(statusCode int, nowrap bool, eiserror bool, errz error) {
 	var err error
+	//r.logger.Info("errorJSON", zap.Error(errz))
 	cerr, ok := errz.(HttpError)
 	if ok && cerr.StatusCode() != 0 {
 		r.fiber.Status(cerr.StatusCode())

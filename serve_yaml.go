@@ -1,12 +1,16 @@
 package allino
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/goccy/go-yaml"
+	"github.com/goccy/go-yaml/ast"
+	"github.com/goccy/go-yaml/parser"
 	"github.com/redis/go-redis/v9"
 	"github.com/wh-kuromai/cryptino"
 	"go.uber.org/zap"
@@ -131,4 +135,42 @@ func NewYAMLCustomEncodeOption() []yaml.EncodeOption {
 	})
 	opts = append(opts, opt)
 	return opts
+}
+
+func YAMLPathUnmarshal(buf []byte, path string, config any) (err error) {
+
+	defer func() {
+		// recover needed.
+		// when try to unmarshal yaml with specified path not exists, goccy/yaml will panic.
+		if r := recover(); r != nil {
+			err = errors.New("key not found")
+		}
+	}()
+
+	f, err := parser.ParseBytes(buf, 0)
+	if err != nil {
+		return err
+	}
+
+	// 1. パスを作成（例: "$.extension_name"）
+	// $. はルートを表します
+	var ypath *yaml.Path
+	ypath, err = yaml.PathString(path)
+	if err != nil {
+		return err
+	}
+
+	var extnode ast.Node
+	extnode, err = ypath.FilterNode(f.Docs[0].Body)
+	if err != nil {
+		return err
+	}
+
+	decoder := yaml.NewDecoder(bytes.NewBuffer(nil), yamlDecodeOption...)
+	err = decoder.DecodeFromNode(extnode, config)
+	if err != nil {
+		return err
+	}
+
+	return
 }

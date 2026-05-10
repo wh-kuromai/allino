@@ -27,7 +27,11 @@ type HandlerOption struct {
 	HTMLTemplate       string
 
 	// Custom field
-	Extra any
+	Package string
+	Extra   any
+
+	// Session
+	Session SessionOption
 
 	// Job
 	Name    string
@@ -63,6 +67,7 @@ type HandlerOption struct {
 	errorType        reflect.Type
 	eiserror         bool
 	hasSelfDiscovery bool
+	inputReflectPlan *reflectPlan
 
 	lastRun *time.Time
 	exts    *sync.Map

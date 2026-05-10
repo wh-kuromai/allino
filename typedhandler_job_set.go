@@ -53,8 +53,12 @@ func (s *jobset) Slice() []string {
 	return r
 }
 
-func (s *jobset) Diff(other *jobset) []string {
-	if other.Len() == 0 {
+func (s *jobset) Diff(others ...*jobset) []string {
+	c := 0
+	for _, other := range others {
+		c += other.Len()
+	}
+	if c == 0 {
 		return s.Slice()
 	}
 
@@ -63,7 +67,15 @@ func (s *jobset) Diff(other *jobset) []string {
 	res := make([]string, 0, len(s.m))
 
 	for k := range s.m {
-		if !other.Contains(k) {
+		contains := false
+		for _, other := range others {
+			if other.Contains(k) {
+				contains = true
+				break
+			}
+		}
+
+		if !contains {
 			res = append(res, k)
 		}
 	}

@@ -7,8 +7,20 @@ import (
 	"time"
 )
 
+type TimeWheelConfig struct {
+	Slot         int           `json:"slots"`
+	TickInterval time.Duration `json:"tick_interval"`
+}
+
+func (s *TimeWheelConfig) setup(ctx context.Context) *TimeWheel {
+	timewheel := newTWWheel(s.Slot, s.TickInterval)
+	go timewheel.Run(ctx)
+
+	return timewheel
+}
+
 // 精度を 0.1s (100ms) に設定
-const tickInterval = 100 * time.Millisecond
+//const tickInterval = 100 * time.Millisecond
 
 type twTask struct {
 	rounds   int
@@ -21,23 +33,25 @@ func (t *twTask) Cancel() {
 	t.canceled.Store(true)
 }
 
-type twWheel struct {
-	slots   [][]*twTask
-	current int
-	mu      sync.Mutex
+type TimeWheel struct {
+	slots        [][]*twTask
+	current      int
+	mu           sync.Mutex
+	tickInterval time.Duration
 }
 
-func newTWWheel(slotCount int) *twWheel {
+func newTWWheel(slotCount int, interval time.Duration) *TimeWheel {
 	if slotCount <= 0 {
 		slotCount = 32
 	}
-	return &twWheel{
-		slots: make([][]*twTask, slotCount),
+	return &TimeWheel{
+		slots:        make([][]*twTask, slotCount),
+		tickInterval: interval,
 	}
 }
 
-func (w *twWheel) Run(ctx context.Context) {
-	ticker := time.NewTicker(tickInterval) // 0.1秒ごとに発火
+func (w *TimeWheel) Run(ctx context.Context) {
+	ticker := time.NewTicker(w.tickInterval) // 0.1秒ごとに発火
 	defer ticker.Stop()
 
 	for {
@@ -80,17 +94,17 @@ func (w *twWheel) Run(ctx context.Context) {
 	}
 }
 
-func (w *twWheel) Add(delay time.Duration, fn func() bool) *twTask {
+func (w *TimeWheel) Add(delay time.Duration, fn func() bool) *twTask {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.addTaskLocked(delay, fn)
 }
 
-func (w *twWheel) addTaskLocked(delay time.Duration, fn func() bool) *twTask {
+func (w *TimeWheel) addTaskLocked(delay time.Duration, fn func() bool) *twTask {
 	slotCount := len(w.slots)
 
 	// delay が何 tick 分かを計算 (例: 0.5s / 0.1s = 5 ticks)
-	ticks := int(delay / tickInterval)
+	ticks := int(delay / w.tickInterval)
 	if ticks < 1 && delay > 0 {
 		ticks = 1 // 最小でも次の tick で実行
 	}
@@ -108,7 +122,7 @@ func (w *twWheel) addTaskLocked(delay time.Duration, fn func() bool) *twTask {
 	return task
 }
 
-func (w *twWheel) Reset(t *twTask, delay time.Duration) {
+func (w *TimeWheel) Reset(t *twTask, delay time.Duration) {
 	t.Cancel()
 	w.Add(delay, t.fn)
 }

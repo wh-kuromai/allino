@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rs/xid"
 	"github.com/wh-kuromai/allino"
 	"github.com/wh-kuromai/allino/example/test/handlers"
 
@@ -21,7 +20,7 @@ var s = allino.NewTestServer(&allino.Config{
 	//},
 	SQL: allino.SQLConfig{
 		Driver: "sqlite",
-		DSN:    "./tmp/test_sqlite" + xid.New().String() + ".db", //"postgresql://testuser@localhost:5432/testdb?sslmode=disable",
+		//DSN:    "./tmp/test_sqlite" + xid.New().String() + ".db", //"postgresql://testuser@localhost:5432/testdb?sslmode=disable",
 	},
 })
 

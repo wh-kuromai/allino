@@ -29,13 +29,13 @@ func (r *Server) TypedHandle(th TypedHandler) {
 		}
 	}
 
-	if th.Options().Internal {
+	opt := th.Options()
+	if opt.Internal || opt.Path == "" {
 		r.internalHandlerCache = append(r.internalHandlerCache, th)
 		return
 	}
 
-	opt := th.Options()
-	if opt.CORS {
+	if opt.CORS || (r.Config != nil && r.Config.Debug) {
 		r.Fiber.Add("OPTIONS", opt.Path, func(w *fiber.Ctx) error {
 			addCORSHeaders(opt, w)
 			w.Status(http.StatusOK)
@@ -51,6 +51,10 @@ func (r *Server) TypedHandle(th TypedHandler) {
 				zap.String("path", opt.Path),
 				zap.String("ip", req.ClientIP()),
 			)
+
+			if opt.CORS || r.Config.Debug {
+				addCORSHeaders(opt, req.Fiber())
+			}
 		} else {
 			req.loggerWith = req.Logger().With(
 				zap.String("path", opt.Path),
@@ -77,7 +81,7 @@ func (s *Server) TypedHandleWithPath(pattern string, th TypedHandler) {
 
 func (r *Server) TypedHandleFiber(options HandlerOption, h fiber.Handler) {
 	opt := &options
-	if options.CORS {
+	if options.CORS || r.Config.Debug {
 		r.Fiber.Add("OPTIONS", options.Path, func(w *fiber.Ctx) error {
 			addCORSHeaders(opt, w)
 			w.Status(http.StatusOK)

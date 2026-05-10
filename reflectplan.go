@@ -15,6 +15,7 @@ const (
 	tagCookie
 	tagHeader
 	tagRegex
+	tagCli
 	tagSize
 )
 
@@ -27,6 +28,7 @@ var tagKindStrings = []string{
 	"cookie",
 	"header",
 	"regex",
+	"cli",
 }
 
 func (p tagKind) String() string {
@@ -61,7 +63,7 @@ func buildPlan(t reflect.Type) *reflectPlan {
 		return nil
 	}
 
-	fields := make([]*fieldPlan, 0, t.NumField())
+	fields := make([]*fieldPlan, t.NumField())
 
 	for i := 0; i < t.NumField(); i++ {
 		sf := t.Field(i)
@@ -100,21 +102,12 @@ func buildPlan(t reflect.Type) *reflectPlan {
 			}
 		}
 
-		// ★ ここがポイント：非ポインタの struct フィールドだけ再帰
-		if fp.basetyp.Kind() == reflect.Struct && !fp.ispointer {
-			// 匿名かどうかに関係なく、子プランとして保持（フラット化はしない）
+		// ★ ここがポイント：非ポインタの struct 匿名フィールドだけ再帰
+		if sf.Anonymous && fp.basetyp.Kind() == reflect.Struct && !fp.ispointer {
 			fp.child = buildPlan(fp.basetyp)
 		}
 
-		fields = append(fields, fp)
-
-		// --- 将来の拡張メモ ---
-		// ・匿名埋め込み struct をフラット化したい場合は、
-		//   if sf.Anonymous && sf.Type.Kind()==reflect.Struct { 再帰して展開 }
-		//   ただしその際は fieldPlan に index []int（FieldByIndex 用）を追加すること。
-		// ・post:"json/xml/raw" のような挙動フラグ（setDirect 等）は、この段階で
-		//   解析して fieldPlan に boolean を持たせると実行時の分岐が軽くなる。
-		// ・validator 用の required / default / fallback なども同様に前処理しておくと良い。
+		fields[i] = fp
 	}
 
 	return &reflectPlan{

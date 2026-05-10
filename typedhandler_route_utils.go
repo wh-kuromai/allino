@@ -2,8 +2,10 @@ package allino
 
 import (
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"reflect"
+	"strings"
 
 	"github.com/wh-kuromai/jsonino"
 )
@@ -30,6 +32,13 @@ func generateRouteFromOptions(opt *HandlerOption) (string, string) {
 	}
 
 	if opt.outputType != nil {
+		// 👇 ここ追加：[]byte 判定
+		t := opt.outputType
+		if t == reflect.TypeOf((*[]byte)(nil)).Elem() {
+			body += "  Response:\n    Binary (" + opt.ContentType + ")"
+			return path, body
+		}
+
 		n, err := jsonino.SchemaFrom(opt.outputType)
 		if err == nil {
 
@@ -38,6 +47,11 @@ func generateRouteFromOptions(opt *HandlerOption) (string, string) {
 				body = "  Request:\n    " + body + "\n"
 			}
 			body += "  Response:\n    " + string(sample)
+		} else {
+			//fmt.Println("why error is nil??? ", n, err)
+			if body != "" {
+				body = "  Request:\n    " + body
+			}
 		}
 	}
 
@@ -84,17 +98,55 @@ func parseParametersAndFormDataForRoute(t reflect.Type) (
 				}
 			}
 		case "query":
-			params += "&" + name + "=" + field.Type.Name()
+			if i != 0 {
+				params += "&"
+			}
+
+			params += formatParam(field, name)
 		case "form":
-			formSchema += name + "=" + field.Type.Name()
+			if i != 0 {
+				formSchema += "&"
+			}
+
+			formSchema += formatParam(field, name)
+
 			if field.Type == reflect.TypeOf((*multipart.FileHeader)(nil)) {
 				usesMultipart = true
 			}
 		}
 	}
-
-	if params != "" {
-		params = params[1:]
-	}
 	return
+}
+
+func isRequired(field reflect.StructField) bool {
+	v := field.Tag.Get("validate")
+	if v == "" {
+		return false
+	}
+
+	// "required,email" とかにも対応
+	for _, rule := range strings.Split(v, ",") {
+		if rule == "required" {
+			return true
+		}
+	}
+	return false
+}
+
+func formatParam(field reflect.StructField, name string) string {
+	n := name
+
+	// required
+	if isRequired(field) {
+		n += "*"
+	}
+
+	typ := field.Type.Name()
+
+	// default
+	if def := field.Tag.Get("default"); def != "" {
+		return fmt.Sprintf("%s=%s(default=%s)", n, typ, def)
+	}
+
+	return fmt.Sprintf("%s=%s", n, typ)
 }

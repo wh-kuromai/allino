@@ -18,7 +18,9 @@ func isReallyNil(value any) bool {
 	}
 }
 
-func NewRefOf[T any](f func(any)) T {
+/*
+
+func newRefOf[T any](f func(any)) T {
 	tType := reflect.TypeOf((*T)(nil)).Elem()
 
 	// T == any の場合
@@ -32,10 +34,13 @@ func NewRefOf[T any](f func(any)) T {
 		f(v)
 		return v.(T)
 	}
+
 	ptr := reflect.New(tType)
 	f(ptr.Interface())
 	return ptr.Elem().Interface().(T)
 }
+
+*/
 
 /*
 func NewErrorOf[T error](f func(T) error) error {

@@ -62,7 +62,7 @@ func PrintJobList(jobs []JobInfo) {
 			"%d  %s  %s  %s  %s\n",
 			jobIDtoJobNum(j.JobID),
 			j.Handler,
-			styleStatus(j.Meta.Status),
+			styleStatus(sqlStatusCodeStrings[j.Meta.Status]),
 			j.UpdatedAt.Format("15:04:05"),
 			lease,
 		)

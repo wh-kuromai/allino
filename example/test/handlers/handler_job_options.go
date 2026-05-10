@@ -106,7 +106,7 @@ var IntervalWorkerHandler = allino.NewTypedHandler(
 		JobMode:  "dispatch",
 		Internal: true,
 		Job: allino.JobOption{
-			Interval: 2 * time.Second,
+			Interval: 3 * time.Second,
 		},
 	},
 	func(r *allino.Request, param IntervalInput) (*IntervalOutput, error) {

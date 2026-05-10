@@ -243,6 +243,7 @@ type HandlerOption struct {
   Name    string // Logical name of this handler. Required when using Job mode.
   Version string // Semantic version of the handler (e.g. "1.0.0"). Optional.
 
+  Session allino.Session
   // JobMode defines the execution behavior of this handler.
   // Note: Certain modes require the handler to be idempotent. Allino caches/stores
   // results using a key: Name + Version + hash(input).
@@ -251,7 +252,7 @@ type HandlerOption struct {
   //   "cache"      : Caches the result based on input JSON; returns the cached result if available.
   //   "dedupe"     : Ensures only one execution runs concurrently for the same input; returns allino.ErrJobDuplicated if dupulicated. (Requires idempotency)
   //   "once"       : Ensures the handler runs only once per unique input; Subsequent calls return allino.ErrJobDuplicated. (Requires idempotency)
-  //   "memoized"   : Ensures the handler runs only once per unique input; Subsequent calls return cached result. (Requires idempotency)
+  //   "memoized"   : Ensures the handler runs only once per unique input; Subsequent calls wait complete and return cached result. (Requires idempotency)
   //   "async"      : Runs the handler asynchronously. (Internal=true only)
   //   "dispatch"   : Hybrid of Async + Cache. Returns a cached result synchronously if found; otherwise, enqueues as 'async'. (Requires idempotency)
   JobMode string
@@ -266,6 +267,25 @@ type JobOption struct {
 type IdempotentRequest interface {
 	IdempotencyKey() string // Override caches/stores key, when input struct of the handler implements this.
 }
+
+type SessionOption struct {
+  // Type defines the session backend implementation.
+  //   "" or "redis": Standard session stored in Redis.
+  //   "sticky"     : In-memory session. The session object is never serialized.
+  //                  Requests are always routed/proxied to the server instance
+  //                  that owns the session.
+	Type string
+  // Name identifies the session group.
+  // Handlers sharing the same Name will access the same session instance.
+  Name string
+  // UseResource specifies the resources consumed when creating a session.
+  UseResource map[string]int // optional, sticky only
+}
+
+// WithSession retrieves/create a typed session instance associated with the request, then call callback within sync.Mutex lock.
+// A session ID is automatically issued and managed via cookies.
+func WithSession[S any](r *Request, fn func(*S) error) error
+
 // Call executes the handler.
 // This can be used inside another handler or from application code.
 func (rw *GenericTypedHandler[T, U, E]) Call(r *Request, input T) (output U, err error)
@@ -283,6 +303,7 @@ type SampleAPIInput struct {
 	Uid  string `path:"uid"` // Supported parameter tag: path:"path", query:"key", form:"key", jwt:"key" (populated only from a successfully verified JWT Claims), cookie:"name", header:"name"
   Version string `query:"ver" default:"v1"`   // Default values (applied before binding; empty input overwrites)
   // Body SampleAPIInputJSONBody `post:"json"` // Automatically binds JSON body to this field. (json.Unmarshal(body, &param.Body))
+  // CLIFilePath string `cli:"path"` // CLI variables (yourapp run YourHandler --set path=abc.txt)
 }
 type SampleAPIOutput struct {
 	Echo    string    `json:"echo,omitempty"`

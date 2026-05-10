@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/xid"
@@ -35,9 +34,10 @@ const (
 	REQUEST_WS
 	REQUEST_CRON
 	REQUEST_JOB
+	REQUEST_CLI
 )
 
-var requestTypeStr = []string{"virt", "req", "ws", "job"}
+var requestTypeStr = []string{"virtual", "http", "ws", "cron", "job", "cli"}
 
 func (r RequestType) String() string {
 	return requestTypeStr[int(r)]
@@ -51,9 +51,9 @@ type Request struct {
 	redis      redis.UniversalClient
 	sql        *sql.DB
 
-	memo requestMemo
-
-	cache *requestCache
+	server *Server
+	memo   requestMemo
+	cache  *requestCache
 }
 
 type requestMemo struct {
@@ -66,13 +66,17 @@ type requestCache struct {
 	req_type  RequestType
 	requestid string
 	clientip  string
+	//endpoint  string
 
-	taskwheel        *twWheel
-	validator        *validator.Validate
-	input            any
-	sessionid        string
-	guestcookiefound bool
-	ctx              context.Context
+	//taskwheel        *twWheel
+	//validator        *validator.Validate
+	input          any
+	sessiontype    string
+	sessionid      string
+	sessionname    string
+	sessionversion string
+	//guestcookiefound  bool
+	//ctx              context.Context
 
 	cachedLogin    bool
 	cachedUid      string
@@ -88,8 +92,9 @@ type requestCache struct {
 	jwtdecodedbyclaims map[string]string
 	jwtdecodedbytag    map[string]json.RawMessage
 
-	extopts []ExtOption
+	//extopts []*ExtOption
 	body    []byte
+	deferfn []func() error
 }
 
 func NewRequest(s *Server, w *fiber.Ctx) *Request {
@@ -99,11 +104,14 @@ func NewRequest(s *Server, w *fiber.Ctx) *Request {
 		logger: s.Logger,
 		redis:  s.Redis,
 		sql:    s.SQL,
+		server: s,
+
 		cache: &requestCache{
-			ctx:       s.appctx,
-			extopts:   s.extopts,
-			taskwheel: s.taskwheel,
-			validator: s.Validator,
+			//ctx:       s.appctx,
+			//extopts:   s.extopts,
+			//taskwheel: s.taskwheel,
+			//validator: s.Validator,
+			//endpoint:  s.endpoint,
 		},
 	}
 	return req
@@ -115,6 +123,10 @@ func (r *Request) Config() *Config {
 
 func (r *Request) Fiber() *fiber.Ctx {
 	return r.fiber
+}
+
+func (r *Request) Server() *Server {
+	return r.server
 }
 
 func (r *Request) Redis() redis.UniversalClient {
@@ -136,6 +148,13 @@ func (r *Request) Logger() *zap.Logger {
 		r.loggerWith = r.logger
 	}
 	return r.loggerWith
+}
+
+func (r *Request) Defer(fn func() error) {
+	if r.cache.deferfn == nil {
+		r.cache.deferfn = make([]func() error, 0, 5)
+	}
+	r.cache.deferfn = append(r.cache.deferfn, fn)
 }
 
 func (r *Request) RequestID() string {
@@ -198,10 +217,10 @@ func (r *Request) Context() context.Context {
 		return r.fiber.UserContext()
 	}
 
-	if r.cache.ctx == nil {
-		r.cache.ctx = context.Background()
+	if r.server.appctx == nil {
+		r.server.appctx = context.Background()
 	}
-	return r.cache.ctx
+	return r.server.appctx
 }
 
 func (r *Request) jwtdecodedbytag(jwtbody []byte) (map[string]json.RawMessage, error) {
@@ -387,6 +406,18 @@ func (r *Request) getByStructField(rpf *fieldPlan, fieldVal reflect.Value) (stri
 		}
 	}
 
+	//qx, ok = field.Tag.Lookup("cli")
+	qx = rpf.tags[tagCli]
+	ok = rpf.tagoks[tagCli]
+	if ok {
+		qx := r.config.CliVar[qx]
+		if qx != "" {
+			return qx, true, nil
+		} else {
+			return "", false, nil
+		}
+	}
+
 	return "", false, nil
 }
 
@@ -412,7 +443,11 @@ func (r *Request) getAll(params interface{}, rp *reflectPlan) error {
 	pt := pv.Type()
 
 	for i := 0; i < pt.NumField(); i++ {
-		//ptf := pt.Field(i)
+		ptf := pt.Field(i)
+		// 非公開フィールドはスキップ（タグ付けされていても set できないため）
+		if ptf.PkgPath != "" && !ptf.Anonymous {
+			continue
+		}
 		rpf := rp.fields[i]
 		ptv := pv.Field(i)
 
@@ -466,7 +501,7 @@ func (r *Request) getAll(params interface{}, rp *reflectPlan) error {
 			continue
 		}
 
-		if rpf.kind == reflect.Struct && rpf.typ != tTime {
+		if rpf.kind == reflect.Struct && pt.Field(i).Anonymous && rpf.typ != tTime {
 			r.getAll(ptv.Interface(), rpf.child)
 			continue
 		}
@@ -476,20 +511,22 @@ func (r *Request) getAll(params interface{}, rp *reflectPlan) error {
 		if ok {
 			cregex, err := cachedRegex(rx)
 			if err != nil {
-				r.Logger().Warn("regex compile failed",
-					zap.String("field", rpf.name),
-					zap.String("pattern", rx),
-					zap.String("value", pfval),
-				)
-				continue
+				//r.Logger().Warn("regex compile failed",
+				//	zap.String("field", rpf.name),
+				//	zap.String("pattern", rx),
+				//	zap.String("value", pfval),
+				//)
+				//continue
+				return ErrRegexCompileFailed
 			}
 			if !cregex.MatchString(pfval) {
-				r.Logger().Debug("regex mismatch",
-					zap.String("field", rpf.name),
-					zap.String("pattern", rx),
-					zap.String("value", pfval),
-				)
-				continue
+				//r.Logger().Debug("regex mismatch",
+				//	zap.String("field", rpf.name),
+				//	zap.String("pattern", rx),
+				//	zap.String("value", pfval),
+				//)
+				//continue
+				return ErrRegexMismatch
 			}
 		}
 
@@ -497,12 +534,16 @@ func (r *Request) getAll(params interface{}, rp *reflectPlan) error {
 	}
 
 	if !r.config.System.DisableValidator {
-		if err := r.cache.validator.Struct(params); err != nil {
-			return err
+		if err := r.server.Validator.Struct(params); err != nil {
+			return ErrValidationFailed
 		}
 	}
 	return nil
 }
+
+var ErrValidationFailed = NewCodeError(401, "validation_failed", "validation failed")
+var ErrRegexMismatch = NewError("regex mismatch")
+var ErrRegexCompileFailed = NewError("regex micompile failedsmatch")
 
 func setByReflect(value string, ispointer bool, basetyp reflect.Type, ptv reflect.Value) {
 	// if time.Time

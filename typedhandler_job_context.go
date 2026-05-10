@@ -17,11 +17,11 @@ type jobExecutionContext struct {
 	inJSONMarshaled bool
 }
 
-func (c *jobExecutionContext) JobMeta(status string) *JobMeta {
+func (c *jobExecutionContext) JobMeta(status int) *JobMeta {
 	meta := JobMeta{
 		Version:  handlerVersion(c.opt),
 		Status:   status,
-		ParentID: c.r.cache.parentjobid,
+		ParentID: c.JobID(),
 		RootID:   c.r.cache.rootjobid,
 		Priority: c.opt.Job.Priority,
 	}
@@ -83,10 +83,10 @@ func (c *jobExecutionContext) JobID() string {
 	return c.key
 }
 
-func (c *jobExecutionContext) EnqueueStatus() string {
-	status := "running"
+func (c *jobExecutionContext) EnqueueStatus() int {
+	status := statusLeased
 	if c.fromcall && c.opt.Job.Async {
-		status = "queued"
+		status = statusQueued
 	}
 	return status
 }

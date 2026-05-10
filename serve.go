@@ -38,6 +38,7 @@ type Config struct {
 
 	OnInit     func(s *Server) error       `json:"-"`
 	OnServe    func(s *Server) error       `json:"-"`
+	OnListen   func(s *Server) error       `json:"-"`
 	OnShutdown func(s *Server) error       `json:"-"`
 	OnError    func(msg string, err error) `json:"-"`
 
@@ -45,11 +46,13 @@ type Config struct {
 	Description string `json:"description"`
 	Version     string `json:"version"`
 	Bind        string `json:"bind"`
-	NoWelcome   bool   `json:"nowelcome"`
-	NoWrapJSON  bool   `json:"nowrapjson"`
+	//Endpoint    string `json:"endpoint"`
+	NoWelcome  bool `json:"nowelcome"`
+	NoWrapJSON bool `json:"nowrapjson"`
 
 	Routing      RoutingConfig      `json:"routing"`
 	Login        LoginConfig        `json:"login"`
+	Session      SessionConfig      `json:"session"`
 	Redis        RedisConfig        `json:"redis"`
 	SQL          SQLConfig          `json:"sql"`
 	Log          LogConfig          `json:"log"`
@@ -59,11 +62,14 @@ type Config struct {
 	System       SystemConfig       `json:"system"`
 	TrustedProxy TrustedProxyConfig `json:"trustedproxy"`
 	JobConfig    JobConfig          `json:"job"`
+	HttpClient   HttpClientConfig   `json:"httpclient"`
+	TimeWheel    TimeWheelConfig    `json:"timewheel"`
 
-	Debug            bool      `json:"debug"`
-	DisabledCommands []string  `json:"-"`
-	Prefix           string    `json:"-"`
-	StartAt          time.Time `json:"-"`
+	Debug            bool              `json:"debug"`
+	DisabledCommands []string          `json:"-"`
+	Prefix           string            `json:"-"`
+	StartAt          time.Time         `json:"-"`
+	CliVar           map[string]string `json:"-"`
 }
 
 type SystemConfig struct {
@@ -83,16 +89,22 @@ type RoutingConfig struct {
 }
 
 type Server struct {
-	Config    *Config
-	Fiber     *fiber.App
-	Logger    *zap.Logger
-	Redis     redis.UniversalClient
-	SQL       *sql.DB
-	Cron      *cron.Cron
-	Validator *validator.Validate
+	Config     *Config
+	Fiber      *fiber.App
+	Logger     *zap.Logger
+	Redis      redis.UniversalClient
+	SQL        *sql.DB
+	Cron       *cron.Cron
+	Validator  *validator.Validate
+	jobManager *jobManager
+	HttpClient *http.Client
+	Session    *SessionManager
+	Env        map[string]string
+	TimeWheel  *TimeWheel
 
+	nodeip     string
 	extensions []extendable
-	extopts    []ExtOption
+	extopts    []*ExtOption
 
 	typedHandlerCache    []TypedHandler
 	internalHandlerCache []TypedHandler
@@ -102,10 +114,9 @@ type Server struct {
 	appcancel   context.CancelFunc
 	forcectx    context.Context
 	forcecancel context.CancelFunc
-	taskwheel   *twWheel
 	//runAsPlugin bool
 
-	jobManagerCache *jobManager
+	handlerOptMap map[string]*HandlerOption
 }
 
 var callSQLstrategy *callSQLStrategy
@@ -116,12 +127,13 @@ var yamlEncodeOption = NewYAMLCustomEncodeOption()
 //go:embed appsetting_default.yaml
 var settingDefault []byte
 
-func NewServer(config *Config) (*Server, error) {
+func NewServer(config *Config, extconfig ...map[string]any) (*Server, error) {
 	s := &Server{
 		Config: &Config{},
 		//Router: httprouter.New(),
-		Cron:      cron.New(),
-		Validator: validator.New(),
+		Cron:          cron.New(),
+		Validator:     validator.New(),
+		handlerOptMap: map[string]*HandlerOption{},
 	}
 
 	ctxb := context.Background()
@@ -142,6 +154,13 @@ func NewServer(config *Config) (*Server, error) {
 		s.extensions = extensionList
 		for _, ext := range s.extensions {
 			s.extopts = append(s.extopts, ext.ExtOption())
+
+			if len(extconfig) > 0 {
+				extc, ok := extconfig[0][ext.ExtOption().Name]
+				if ok {
+					ext.initConfig(extc)
+				}
+			}
 		}
 	}
 
@@ -227,6 +246,8 @@ func NewServer(config *Config) (*Server, error) {
 		s.Fiber.Use(logmiddle)
 	}
 
+	s.TimeWheel = s.Config.TimeWheel.setup(s.appctx)
+
 	err = s.Config.Login.setup()
 	if err != nil {
 		return nil, err
@@ -241,6 +262,13 @@ func NewServer(config *Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	s.HttpClient, err = s.Config.HttpClient.setup()
+	if err != nil {
+		return nil, err
+	}
+
+	s.Env = environMap()
 
 	if len(s.Cron.Entries()) > 0 {
 		s.Cron.Start()
@@ -258,6 +286,20 @@ func NewServer(config *Config) (*Server, error) {
 			err = ext.OnInit(s, NewRequest(s, nil))
 			if err != nil {
 				return nil, fmt.Errorf("OnInit error for Extension %s: %w", ext.Name, err)
+			}
+		}
+	}
+
+	if s.SQL != nil && (s.Config.SQL.AllowMigrate == nil || *s.Config.SQL.AllowMigrate) {
+		for _, ext := range s.extopts {
+			if ext.SQLSchema != nil {
+				schema := ext.SQLSchema(s.Config.SQL.Driver)
+				if schema != "" {
+					_, err = s.SQL.ExecContext(s.appctx, schema)
+					if err != nil {
+						return nil, fmt.Errorf("SQL schema error for Extension %s: %w", ext.Name, err)
+					}
+				}
 			}
 		}
 	}
@@ -283,15 +325,8 @@ func (s *Server) envPrefix() string {
 	return strings.ToUpper(s.Config.Prefix)
 }
 
-func (s *Server) initTaskWheel() {
-	if s.taskwheel == nil {
-		s.taskwheel = newTWWheel(32)
-		go s.taskwheel.Run(s.appctx)
-	}
-}
-
-func NewTestServer(config *Config) *Server {
-	s, err := NewServer(config)
+func NewTestServer(config *Config, extconfig ...map[string]any) *Server {
+	s, err := NewServer(config, extconfig...)
 	if err != nil {
 		panic(fmt.Sprintf("NewTestServer error: %s", err))
 	}
@@ -460,7 +495,12 @@ func (s *Server) Serve() {
 	}
 
 	if s.Config.Debug {
-		fmt.Println("WARNING: debug=true: DO NOT use this on production.")
+		fmt.Println(strings.TrimSpace(`
+WARNING: debug=true
+  DO NOT use this in production.
+  - All endpoints allow cross-origin access.
+  - Add '.user=USERID' to the query for a fake login.
+`))
 		if s.Config.Log.Silent {
 			fmt.Println("         log.silent was overridden to false due to debug mode")
 			s.Config.Log.Silent = false
@@ -480,6 +520,7 @@ func (s *Server) Serve() {
 	}
 
 	for _, ext := range s.extopts {
+		s.Logger.Info("extension init", zap.String("name", ext.Name))
 		if ext.OnHandlerInit != nil {
 			opts := s.RegisteredTypedHandlers()
 			for _, opt := range opts {
@@ -516,6 +557,16 @@ func (s *Server) Serve() {
 	}()
 
 	go func() {
+		time.Sleep(2 * time.Second)
+		if s.Config.OnListen != nil {
+			err := s.Config.OnListen(s)
+			if err != nil {
+				s.errorPrintln("OnListen error: ", err)
+			}
+		}
+	}()
+
+	go func() {
 		err = s.Fiber.Listener(listener)
 		if err != nil && err != http.ErrServerClosed {
 			s.errorPrintln("ListenAndServe error: ", err)
@@ -525,7 +576,7 @@ func (s *Server) Serve() {
 	<-s.appctx.Done()
 
 	if !s.Config.Log.Silent {
-		fmt.Println("Shutting down server...")
+		//fmt.Println("Shutting down server...")
 		s.Logger.Info("server shutting down")
 	}
 
@@ -536,7 +587,9 @@ func (s *Server) Serve() {
 	go func() {
 		<-forceQuit // 2回目のCtrl+Cで強制終了
 
-		fmt.Println("Force quitting in 3sec...")
+		if !s.Config.Log.Silent {
+			s.Logger.Info("force quitting in 3sec...")
+		}
 		s.forcecancel()
 
 		time.AfterFunc(3*time.Second, func() {
@@ -578,13 +631,14 @@ func (s *Server) Serve() {
 	}
 
 	if !s.Config.Log.Silent {
-		fmt.Println("Server gracefully stopped")
+		//fmt.Println("Server gracefully stopped")
 		s.Logger.Info("server shutdown complete")
 	}
 }
 
 func (s *Server) serveInitOnly() {
 	for _, ext := range s.extopts {
+		s.Logger.Info("extension init", zap.String("name", ext.Name))
 		if ext.OnHandlerInit != nil {
 			opts := s.RegisteredTypedHandlers()
 			for _, opt := range opts {

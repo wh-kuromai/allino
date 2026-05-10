@@ -1,11 +1,9 @@
 package allino
 
 import (
-	"bytes"
 	"reflect"
 	"sync"
 
-	"github.com/goccy/go-yaml"
 	"github.com/spf13/cobra"
 )
 
@@ -18,6 +16,7 @@ type ExtInfo struct {
 type ExtOption struct {
 	ExtInfo
 
+	SQLSchema       func(driver string) string
 	OnInit          func(s *Server, virtual *Request) error
 	OnHandlerInit   func(s *Server, virtual *Request, opt *HandlerOption) error
 	OnServe         func(s *Server, virtual *Request) error
@@ -29,8 +28,9 @@ type ExtOption struct {
 }
 
 type extendable interface {
-	ExtOption() ExtOption
+	ExtOption() *ExtOption
 	Update(setting []byte) error
+	initConfig(extconfig any)
 }
 
 type Extension[E, F any] struct {
@@ -76,30 +76,54 @@ func (c *Extension[E, F]) HandlerOptionExt(opt *HandlerOption) (F, bool) {
 	return zeroF, false
 }
 
-func (c Extension[E, F]) ExtOption() ExtOption {
-	return *c.Option
+func (c *Extension[E, F]) ExtOption() *ExtOption {
+	return c.Option
 }
-func (c Extension[E, F]) Update(setting []byte) error {
+
+func (c *Extension[E, F]) initConfig(extconfig any) {
+	if c.eIsAny {
+		return
+	}
+
+	extc, ok := extconfig.(*E)
+	if ok {
+		c.Config = extc
+		setDefault(c.Config)
+		return
+	}
+
+	extcd, ok := extconfig.(E)
+	if ok {
+		c.Config = &extcd
+		setDefault(c.Config)
+	}
+}
+
+func (c *Extension[E, F]) Update(setting []byte) error {
 	if c.eIsAny {
 		return nil
 	}
-	decoder := yaml.NewDecoder(bytes.NewBuffer(setting), yamlDecodeOption...)
-	return decoder.Decode(c.Config)
+
+	//decoder := yaml.NewDecoder(bytes.NewBuffer(setting)) //, yamlDecodeOption...)
+	//return decoder.Decode(c.Config)
+
+	YAMLPathUnmarshal(setting, "$."+c.Option.Name, c.Config)
+	return nil
 }
 
-func NewExtension[E, F any](name string, opt *ExtOption) *Extension[E, F] {
-	var config E
+func NewExtension[CONF, OPT any](name string, opt *ExtOption) *Extension[CONF, OPT] {
+	var config CONF
 	if opt == nil {
 		opt = &ExtOption{}
 	}
 	opt.ExtInfo.Name = name
-	ce := &Extension[E, F]{
+	ce := &Extension[CONF, OPT]{
 		Config: &config,
 		Option: opt,
 	}
 
-	tEType := reflect.TypeOf((*E)(nil)).Elem()
-	tFType := reflect.TypeOf((*F)(nil)).Elem()
+	tEType := reflect.TypeOf((*CONF)(nil)).Elem()
+	tFType := reflect.TypeOf((*OPT)(nil)).Elem()
 	anyType := reflect.TypeOf((*any)(nil)).Elem()
 
 	if tEType == anyType {

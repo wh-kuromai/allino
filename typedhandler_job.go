@@ -3,7 +3,8 @@ package allino
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"reflect"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -45,25 +46,23 @@ type JobOption struct {
 	CacheExpire   time.Duration
 	Interval      time.Duration
 
+	OnCacheUpgrade func(version string, updated_at time.Time, old_output []byte) (TransformAction, any, error) `json:"-"`
+
 	//Backend string
 
-	callstrategy callStrategy
+	callstrategy callStrategy `json:"-"`
 }
 
-type JobConf struct {
-}
+type TransformAction int
 
-type JobOpt struct {
-}
+const (
+	TransformActionNone TransformAction = iota
+	TransformActionUse
+	TransformActionFallback
+	TransformActionFail
+)
 
-type jobManager struct {
-	handlers             *jobset
-	handlerOptMap        map[string]*HandlerOption
-	lockedHandlers       *jobset
-	dequeueThroughputEMA *EMACalculator
-}
-
-var JobExtension = NewExtension[JobConf, JobOpt](
+var JobExtension = NewExtension[any, any](
 	"job",
 	&ExtOption{
 		OnHandlerInit: func(s *Server, virtual *Request, opt *HandlerOption) error {
@@ -89,39 +88,33 @@ var JobExtension = NewExtension[JobConf, JobOpt](
 
 			if opt.JobMode != "" {
 				//hbackend := mergeSingle(s.Config.JobConfig.Backend, opt.Job.Backend)
-				if s.jobManagerCache == nil {
-					s.jobManagerCache = &jobManager{
-						handlers:             newJobset(),
-						handlerOptMap:        make(map[string]*HandlerOption),
-						lockedHandlers:       newJobset(),
-						dequeueThroughputEMA: NewEMACalculator(0.3),
-					}
+				if s.jobManager == nil {
+					s.jobManager = newJobManager()
 				}
 
 				if callSQLstrategy == nil {
 					callSQLstrategy = newcallSQLStrategy(s)
-					err := callSQLstrategy.Init(virtual.Context())
+					err := callSQLstrategy.Init(virtual.Context(), (s.Config.SQL.AllowMigrate != nil && *s.Config.SQL.AllowMigrate))
 					if err != nil && !s.Config.Log.Silent {
-						s.Logger.Info("job system error", zap.String("component", "register"), zap.Error(err))
+						s.Logger.Error("job system error", zap.String("component", "register"), zap.Error(err))
 					}
-					strategyWorkerInit(callSQLstrategy, s)
-					s.initTaskWheel()
+					s.jobManager.WorkerInit(callSQLstrategy, s)
 
 					// Reaping
-					s.taskwheel.Add(s.Config.JobConfig.LeaseDuration, func() bool {
+					s.TimeWheel.Add(s.Config.JobConfig.LeaseDuration, func() bool {
 						err = callSQLstrategy.Reaping(s.appctx)
 						if err != nil && !s.Config.Log.Silent {
-							s.Logger.Info("job system error", zap.String("component", "reaping"), zap.Error(err))
+							s.Logger.Error("job system error", zap.String("component", "reaping"), zap.Error(err))
 						}
 						return true
 					})
 				}
 
 				opt.Job.callstrategy = callSQLstrategy
-				s.jobManagerCache.handlers.Add(encodeHandlerName(opt))
-				s.jobManagerCache.handlerOptMap[encodeHandlerName(opt)] = opt
+				s.jobManager.handlers.Add(encodeHandlerName(opt))
 			}
 
+			s.handlerOptMap[encodeHandlerName(opt)] = opt
 			return nil
 		},
 
@@ -131,174 +124,120 @@ var JobExtension = NewExtension[JobConf, JobOpt](
 	},
 )
 
-func strategyWorkerInit(s callStrategy, sv *Server) {
-	//idleit := sv.Config.JobConfig.IdleInterval
-	//leasesec := int(mergeSingle(sv.Config.JobConfig.LeaseSeconds, opt.Job.LeaseSeconds).Seconds())
+var ErrHandlerNotFound = NewError("handler not found")
 
-	leaset := sv.Config.JobConfig.LeaseDuration
+func find_handler(sv *Server, handler string) (string, error) {
+	_, ok := sv.handlerOptMap[handler]
+	if ok {
+		return handler, nil
+	}
 
-	jobchan := make(chan JobTask, sv.Config.JobConfig.Concurrency*2)
-
-	backoff := NewBackoff(100*time.Millisecond, sv.Config.JobConfig.IdleInterval)
-	attempt := 0
-
-	go func() {
-		for {
-			select {
-			case <-sv.appctx.Done():
-				return
-			default:
-				hs := sv.jobManagerCache.handlers.Diff(sv.jobManagerCache.lockedHandlers)
-				jtask, err := s.Dequeue(sv.appctx, hs, leaset, sv.jobManagerCache.dequeueThroughputEMA)
-				if err != nil {
-					if !errors.Is(err, ErrJobNotFound) {
-						sv.Logger.Error("job system error", zap.String("component", "dequeue"), zap.Error(err))
-					}
-
-					attempt++
-					wait := backoff.Duration(attempt)
-					time.Sleep(wait)
-					continue
-				}
-
-				jtask.Meta().ParentID = jtask.Key()
-				if jtask.Meta().RootID == "" {
-					jtask.Meta().RootID = jtask.Key()
-				}
-
-				// if dequeued need handler lock,
-				opt := sv.jobManagerCache.handlerOptMap[jtask.Handler()]
-				if opt.Job.Interval != 0 {
-					sv.jobManagerCache.lockedHandlers.Add(jtask.Handler())
-				}
-
-				attempt = 0
-				jobchan <- jtask
-			}
+	for k, _ := range sv.handlerOptMap {
+		idx := strings.Index(k, "@")
+		if idx > 0 && k[:idx] == handler {
+			return k, nil
 		}
-	}()
+	}
 
-	numgoroutine := sv.Config.JobConfig.Concurrency
-	for i := 0; i < numgoroutine; i++ {
-		go func() {
-			for {
-				select {
-				case <-sv.appctx.Done():
-					return
-				case jtask := <-jobchan:
-					now := time.Now()
-					opt := sv.jobManagerCache.handlerOptMap[jtask.Handler()]
+	return "", ErrHandlerNotFound
+}
 
-					// check if need to re-dispatch
-					needDispatch := false
-					var waitDur time.Duration
-					if opt.Job.Interval != 0 && opt.lastRun != nil {
-						waitDur = time.Until((*opt.lastRun).Add(time.Duration(float64(opt.Job.Interval) * sv.jobManagerCache.dequeueThroughputEMA.CurrentAverage)))
-						if waitDur > 0 {
-							needDispatch = true
+// called from CLI
+func call_direct(sv *Server, r *Request, handler string, injson []byte, infunc func(input any) error) (key string, outjson []byte, err []byte, syserr error) {
+
+	opt := sv.handlerOptMap[handler]
+
+	var jec = jobExecutionContext{
+		r:               r,
+		opt:             opt,
+		inJSON:          injson,
+		inJSONMarshaled: true,
+		fromcall:        true,
+	}
+
+	r.cache.req_type = REQUEST_CLI
+	r.cache.parentjobid = jec.JobID()
+	r.cache.rootjobid = jec.JobID()
+
+	return opt.consumer(r, encodeHandlerName(opt), injson, true, infunc)
+}
+
+func unmarshalfnMake[U any, E error](r *Request, opt *HandlerOption, upool *ReflectPool[U], epool *ReflectPool[E], handler string) func(ji JobInfo, outjson []byte, errjson []byte, serr error) (output U, err error, syserr error) {
+	return func(ji JobInfo, outjson []byte, errjson []byte, serr error) (output U, err error, syserr error) {
+
+		var zeroU U
+		now := time.Now()
+
+		// cache expired or version mismatch
+		if hasMajorOrMinorVersionDiff(ji.Meta.Version, handlerVersion(opt)) ||
+			(ji.Meta.TTL != nil && now.After(*ji.Meta.TTL)) {
+
+			// try cache transform
+			if opt.Job.OnCacheUpgrade != nil && outjson != nil && errjson == nil {
+
+				result, newout, newerr := opt.Job.OnCacheUpgrade(ji.Meta.Version, ji.UpdatedAt, outjson)
+				switch result {
+				case TransformActionUse:
+					newoutput, ok := newout.(U)
+					if ok {
+						ji.Meta.Version = handlerVersion(opt)
+						ji.UpdatedAt = now
+						newoutjson, _, newsyserr := marshalOutputSet[U, E](newoutput, nil)
+						if newsyserr != nil {
+							if !r.config.Log.Silent {
+								r.logger.Info("cache transform failed: marshal error", zap.String("handler", handler), zap.Error(newsyserr))
+							}
+							return zeroU, FatalTransformFailed, nil
 						}
-					}
 
-					task := sv.taskwheel.Add(time.Duration(leaset/2), func() bool {
-						err := jtask.HeartBeat(sv.appctx, leaset)
-						//err := s.LeaseUpdate(sv.appctx, jobn.key, leaset)
-						if err != nil && !sv.Config.Log.Silent {
-							sv.Logger.Info("job system error", zap.String("component", "leaseupdate"), zap.Error(err))
-						}
-						return true
-					})
-
-					fn := func() bool {
-						r := NewRequest(sv, nil)
-						r.cache.req_type = REQUEST_JOB
-						r.cache.requestid = jtask.Key()
-						r.cache.parentjobid = jtask.Meta().ParentID
-						r.cache.rootjobid = jtask.Meta().RootID
-
-						if !r.config.Log.Silent {
-							r.logger.Info("job started", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()))
-						}
-						_, outjson, errjson, syserr := opt.consumer(r, jtask.Handler(), jtask.Input())
+						// update cache and return new output
+						syserr = opt.Job.callstrategy.Done(r.Context(), encodeHandlerName(opt), &ji.Meta, ji.JobID, nil, newoutjson, nil)
 						if syserr != nil {
 							if !r.config.Log.Silent {
-								r.logger.Info("job failed", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()), zap.Error(syserr))
+								r.logger.Info("cache transform failed: done error", zap.String("handler", handler), zap.Error(newsyserr))
 							}
-
-							err := jtask.Fail(sv.appctx)
-							//err := s.Free(sv.appctx, jtask.Key())
-							if err != nil && !r.config.Log.Silent {
-								r.logger.Info("job system error", zap.String("component", "dequeue/syserr"), zap.Error(err))
-							}
-						} else if r.memo.jobabortctrl != "" {
-							// cancel if abort or error
-							if !r.config.Log.Silent {
-								r.logger.Info("job requeued", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()))
-							}
-
-							err := jtask.Requeue(sv.appctx, requeueDelay(r))
-							//err := s.Requeue(sv.appctx, jtask.Key(), requeueDelay(r))
-							if err != nil && !r.config.Log.Silent {
-								r.logger.Info("job system error", zap.String("component", "dequeue/requeue"), zap.Error(err))
-							}
-						} else if opt.Job.Cache {
-
-							var ttl *time.Time
-							if opt.Job.CacheExpire != 0 {
-								ttlb := time.Now().Add(opt.Job.CacheExpire)
-								ttl = &ttlb
-							}
-
-							// store if cache or dedupe
-							if !r.config.Log.Silent {
-								r.logger.Info("job completed (cache)", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()))
-							}
-
-							err := jtask.Success(sv.appctx, ttl, outjson, errjson)
-							//err := s.DoneAsync(sv.appctx, jtask.Key(), ttl, outjson, errjson)
-							if err != nil && !r.config.Log.Silent {
-								r.logger.Info("job system error", zap.String("component", "dequeue/doneasync"), zap.Error(err))
-							}
-						} else {
-							if !r.config.Log.Silent {
-								r.logger.Info("job completed", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()))
-							}
-
-							err := jtask.Fail(sv.appctx)
-							//err := s.Free(sv.appctx, jtask.Key())
-							if err != nil && !r.config.Log.Silent {
-								r.logger.Info("job system error", zap.String("component", "dequeue/etc"), zap.Error(err))
-							}
+							return zeroU, FatalTransformFailed, nil
 						}
-						task.Cancel()
-						if needDispatch {
-							sv.jobManagerCache.lockedHandlers.Remove(jtask.Handler())
-							opt.lastRun = &now
-						}
-						return false
+						return newoutput, nil, nil
 					}
+					if !r.config.Log.Silent {
+						r.logger.Info("cache transform failed: output type not match", zap.String("handler", handler))
+					}
+					return zeroU, FatalTransformFailed, nil
 
-					if needDispatch {
-						sv.taskwheel.Add(waitDur, fn)
-					} else {
-						fn()
-						sv.jobManagerCache.lockedHandlers.Remove(jtask.Handler())
-						opt.lastRun = &now
-					}
+				case TransformActionFallback:
+					// return syserr -> cache hit failed -> fallback to execute.
+					return zeroU, nil, ErrJobNotFound
+				case TransformActionFail:
+					// respond newerr
+					return zeroU, newerr, nil
 				}
+
+				return zeroU, FatalTransformFailed, nil
 			}
-		}()
+
+			// fallback if no transformer set.
+			return zeroU, nil, FatalInvalidCacheError
+		}
+
+		_, output, err, syserr = unmarshalOutputSet[U, E](ji, upool, epool, outjson, errjson, serr)
+		if syserr != nil {
+			return zeroU, nil, syserr
+		}
+
+		if opt.Job.CacheErrOnHit {
+			return zeroU, ErrJobDuplicated, nil
+		}
+
+		if !r.config.Log.Silent {
+			r.logger.Info("job cache hit", zap.String("handler", handler))
+		}
+		return output, err, nil
 	}
 }
 
-func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromcall bool) (output U, err error) {
-	if rw.options == nil ||
-		(!(fromcall && rw.options.Job.Async) &&
-			!rw.options.Job.Dedupe &&
-			!rw.options.Job.Cache &&
-			r.memo.jobabortctrl == "") {
-
-		return rw.handlefunc(r, input)
-	}
+// called from HTTP or Handler.Call
+func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall bool) (output U, err error) {
 
 	var zeroU U
 	opt := rw.options
@@ -317,31 +256,16 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 		return zeroU, ErrJobInputEncodeFailed.With(err)
 	}
 
+	r.cache.req_type = REQUEST_CLI
+	r.cache.parentjobid = jec.JobID()
+	r.cache.rootjobid = jec.JobID()
+
 	var syserr error
-	unmarshalfn := func(meta JobInfo, outjson []byte, errjson []byte, serr error) (U, error, error) {
-		var ji JobInfo
-		var syserr error
-		ji, output, err, syserr = unmarshalOutputSet[U, E](meta, outjson, errjson, serr)
-		if syserr == nil {
-			if opt.Job.CacheErrOnHit {
-				return zeroU, ErrJobDuplicated, nil
-			}
 
-			if !hasMajorOrMinorVersionDiff(ji.Meta.Version, handlerVersion(opt)) {
-				if !r.config.Log.Silent {
-					r.logger.Info("job cache hit", zap.String("handler", jec.Handler()))
-				}
-				return output, err, nil
-			}
-
-			return zeroU, nil, FatalInvalidCacheError
-		}
-
-		return zeroU, nil, syserr
-	}
-
+	unmarshalfn := unmarshalfnMake[U, E](r, opt, rw.upool, rw.epool, jec.Handler())
 	if cacheExec {
-		output, err, syserr = unmarshalfn(opt.Job.callstrategy.Hit(r.Context(), jec.Handler(), jec.JobID(), jec.InputJSON()))
+		output, err, syserr = unmarshalfn(opt.Job.callstrategy.Hit(r.Context(), jec.Handler(), opt.Job.CacheExpire != 0, jec.JobID(), jec.InputJSON()))
+
 		if syserr == nil {
 			return output, err
 		}
@@ -353,7 +277,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 		enqueued, err = opt.Job.callstrategy.Enqueue(
 			r.Context(),
 			jec.Handler(),
-			jec.JobMeta("queued"),
+			jec.JobMeta(statusQueued),
 			jec.JobID(),
 			jec.InputJSON(),
 			0)
@@ -365,10 +289,10 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 			return zeroU, FatalBackendError.With(err)
 		}
 
-		if !r.config.Log.Silent {
-			r.logger.Info("job queued", zap.String("handler", jec.Handler()))
-		}
 		if enqueued {
+			if !r.config.Log.Silent {
+				r.logger.Info("job queued", zap.String("handler", jec.Handler()))
+			}
 			return zeroU, NewJobPendingError(jec.JobID(), "job accepted")
 		}
 		return zeroU, NewJobPendingError(jec.JobID(), "job not finished yet")
@@ -377,7 +301,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 		aquiredLock, err = opt.Job.callstrategy.Enqueue(
 			r.Context(),
 			jec.Handler(),
-			jec.JobMeta("running"),
+			jec.JobMeta(statusLeased),
 			jec.JobID(),
 			jec.InputJSON(),
 			0)
@@ -391,7 +315,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 
 		if !aquiredLock {
 			if cacheExec {
-				output, err, syserr = unmarshalfn(opt.Job.callstrategy.Hit(r.Context(), jec.Handler(), jec.JobID(), jec.InputJSON()))
+				output, err, syserr = unmarshalfn(opt.Job.callstrategy.Hit(r.Context(), jec.Handler(), opt.Job.CacheExpire != 0, jec.JobID(), jec.InputJSON()))
 				if syserr == nil {
 					return output, err
 				}
@@ -399,7 +323,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 				// if job is not finished, wait it
 				jnferr, ok := syserr.(*JobPendingError)
 				if ok {
-					output, err, syserr = unmarshalfn(opt.Job.callstrategy.Wait(r.Context(), jnferr.JobID, r.cache.taskwheel))
+					output, err, syserr = unmarshalfn(opt.Job.callstrategy.Wait(r.Context(), jnferr.JobID, rw.options.Job.CacheExpire != 0, r.server.TimeWheel))
 					if syserr == nil {
 						return output, err
 					}
@@ -420,7 +344,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 
 		// Lock aquired
 		leaset := r.config.JobConfig.LeaseDuration
-		task := r.cache.taskwheel.Add(time.Duration(leaset/2), func() bool {
+		task := r.server.TimeWheel.Add(time.Duration(leaset/2), func() bool {
 			err := opt.Job.callstrategy.LeaseUpdate(r.Context(), jec.JobID(), leaset)
 			//err := s.LeaseUpdate(sv.appctx, jobn.key, leaset)
 			if err != nil && !r.Config().Log.Silent {
@@ -441,7 +365,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 				err := opt.Job.callstrategy.Done(
 					r.Context(),
 					jec.Handler(),
-					jec.JobMeta("done"),
+					jec.JobMeta(statusDone),
 					jec.JobID(),
 					jec.InputJSON(),
 					outJSON,
@@ -482,12 +406,17 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 	return output, err
 }
 
-func (rw *GenericTypedHandler[T, U, E]) job_consume(r *Request, handler string, injson []byte) (key string, outputz []byte, errjsonz []byte, syserr error) {
+// called from CLI or Worker
+func (rw *GenericTypedHandler[T, U, E]) job_consume(r *Request, handler string, injson []byte, direct bool, infunc func(input any) error) (key string, outputz []byte, errjsonz []byte, syserr error) {
 
-	var innererr error
-	input := NewRefOf[T](func(a any) {
-		innererr = json.Unmarshal(injson, a)
+	input, innererr := rw.tpool.New(func(a any) error {
+		return json.Unmarshal(injson, a)
 	})
+
+	//var innererr error
+	//input := NewRefOf[T](func(a any) {
+	//	innererr = json.Unmarshal(injson, a)
+	//})
 	if innererr != nil {
 		return key, nil, nil, ErrJobInputDecodeFailed.With(innererr)
 	}
@@ -502,12 +431,35 @@ func (rw *GenericTypedHandler[T, U, E]) job_consume(r *Request, handler string, 
 		}
 	}
 
+	if direct {
+		var t *T
+		if reflect.TypeOf(t).Elem().Kind() == reflect.Ptr {
+			err := r.getAll(input, rw.options.inputReflectPlan)
+			if err != nil {
+				return "", nil, nil, err
+			}
+		} else {
+			err := r.getAll(&input, rw.options.inputReflectPlan)
+			if err != nil {
+				return "", nil, nil, err
+			}
+		}
+	}
+
+	if infunc != nil {
+		err2 := infunc(input)
+		if err2 != nil {
+			return "", nil, nil, err2
+		}
+	}
+
 	outJSON, errJSON, syserr := marshalOutputSet[U, E](rw.handlefunc(r, input))
 	return key, outJSON, errJSON, syserr
 }
 
 func (rw *GenericTypedHandler[T, U, E]) JobResult(r *Request, jobid string) (output U, err error) {
 	var zeroU U
+	var syserr error
 
 	jid, err := decodeJobID(jobid)
 	if err != nil {
@@ -518,25 +470,37 @@ func (rw *GenericTypedHandler[T, U, E]) JobResult(r *Request, jobid string) (out
 		return zeroU, ErrJobHandlerMismatch
 	}
 
-	var ji JobInfo
-	var syserr error
-	ji, output, err, syserr = unmarshalOutputSet[U, E](rw.options.Job.callstrategy.Result(r.Context(), jobid))
+	unmarshalfn := unmarshalfnMake[U, E](r, rw.options, rw.upool, rw.epool, jid.Handler)
+	output, err, syserr = unmarshalfn(rw.options.Job.callstrategy.Result(r.Context(), jobid, rw.options.Job.CacheExpire != 0))
+
 	if syserr == nil {
-		if !hasMajorOrMinorVersionDiff(ji.Meta.Version, handlerVersion(rw.options)) {
-			return output, err
-		}
-		return zeroU, FatalInvalidCacheError
-	} else {
-		if !r.config.Log.Silent {
-			r.logger.Info("job system error", zap.String("component", "jobresult"), zap.Error(syserr))
-		}
+		return output, err
 	}
 
+	if !r.config.Log.Silent {
+		r.logger.Info("job system error", zap.String("component", "jobresult"), zap.Error(syserr))
+	}
+
+	/*
+		var ji JobInfo
+		var syserr error
+		ji, output, err, syserr = unmarshalOutputSet[U, E](rw.options.Job.callstrategy.Result(r.Context(), jobid))
+		if syserr == nil {
+			if !hasMajorOrMinorVersionDiff(ji.Meta.Version, handlerVersion(rw.options)) {
+				return output, err
+			}
+			return zeroU, FatalInvalidCacheError
+		} else {
+			if !r.config.Log.Silent {
+				r.logger.Info("job system error", zap.String("component", "jobresult"), zap.Error(syserr))
+			}
+		}
+	*/
 	return zeroU, syserr
 }
 
 type callStrategy interface {
-	Init(ctx context.Context) error
+	Init(ctx context.Context, allow_migrate bool) error
 
 	// Push job to queue / Aquire Lock
 	Enqueue(ctx context.Context, handler string, meta *JobMeta, key string, injson []byte, delay_sec int) (enqueud bool, err error)
@@ -554,19 +518,22 @@ type callStrategy interface {
 	LeaseUpdate(ctx context.Context, key string, lease_dur time.Duration) (err error)
 
 	// Func is called synchronously and Hit checks if its cached already.
-	Hit(ctx context.Context, handler string, key string, injson []byte) (meta JobInfo, outjson []byte, errjson []byte, err error)
+	Hit(ctx context.Context, handler string, volatile bool, key string, injson []byte) (meta JobInfo, outjson []byte, errjson []byte, err error)
 
 	// Function is called synchronously and then cache its result.
 	Done(ctx context.Context, handler string, meta *JobMeta, key string, injson []byte, outjson []byte, errjson []byte) (err error)
 
 	// Find completed job. (blocking)
-	Wait(ctx context.Context, key string, tw *twWheel) (meta JobInfo, outjson []byte, errjson []byte, err error)
+	Wait(ctx context.Context, key string, volatile bool, tw *TimeWheel) (meta JobInfo, outjson []byte, errjson []byte, err error)
 
 	// Find completed job. (non-blocking)
-	Result(ctx context.Context, key string) (meta JobInfo, outjson []byte, errjson []byte, err error)
+	Result(ctx context.Context, key string, volatile bool) (meta JobInfo, outjson []byte, errjson []byte, err error)
 
 	// List jobs
-	List(ctx context.Context, statuses []string, offset, limit int) ([]JobInfo, error)
+	List(ctx context.Context, statuses []int, offset, limit int) ([]JobInfo, error)
+
+	// Count jobs
+	Total(ctx context.Context, jobid ...string) (map[string]int, error)
 }
 
 type JobTask interface {
@@ -575,7 +542,7 @@ type JobTask interface {
 	Meta() *JobMeta
 	Input() []byte
 
-	Success(ctx context.Context, ttl *time.Time, outjson []byte, errjson []byte) (err error)
+	Success(ctx context.Context, handler string, meta *JobMeta, key string, injson []byte, outjson []byte, errjson []byte) (err error)
 	Fail(ctx context.Context) (err error)
 	HeartBeat(ctx context.Context, lease_dur time.Duration) (err error)
 	Requeue(ctx context.Context, delay_sec int) error
