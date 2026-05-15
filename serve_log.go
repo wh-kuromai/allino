@@ -97,7 +97,7 @@ func (cfg LogRotateConfig) ToLogger() *lumberjack.Logger {
 	return cfg.logger
 }
 
-func (s *LogConfig) Setup(cn *cron.Cron) (*zap.Logger, fiber.Handler, error) {
+func (s *LogConfig) Setup(cn *cron.Cron, debug bool) (*zap.Logger, fiber.Handler, error) {
 	var logger *zap.Logger
 	errfn := func(err error) {
 		if logger != nil {
@@ -105,7 +105,7 @@ func (s *LogConfig) Setup(cn *cron.Cron) (*zap.Logger, fiber.Handler, error) {
 		}
 	}
 
-	cores, err := s.loadErrLogConfigAll(s.ErrorLog, cn, errfn)
+	cores, err := s.loadErrLogConfigAll(s.ErrorLog, cn, debug, errfn)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -139,13 +139,13 @@ func (s *LogConfig) Setup(cn *cron.Cron) (*zap.Logger, fiber.Handler, error) {
 
 }
 
-func (s *LogConfig) loadErrLogConfigAll(c []LogOutputConfig, cn *cron.Cron, errfn func(error)) ([]zapcore.Core, error) {
+func (s *LogConfig) loadErrLogConfigAll(c []LogOutputConfig, cn *cron.Cron, debug bool, errfn func(error)) ([]zapcore.Core, error) {
 	if c == nil {
 		return nil, nil
 	}
 	var lhs []zapcore.Core
 	for _, cc := range c {
-		lh, err := s.loadErrLogConfig(cc, cn, errfn)
+		lh, err := s.loadErrLogConfig(cc, cn, debug, errfn)
 		if err != nil {
 			return nil, err
 		}
@@ -156,7 +156,7 @@ func (s *LogConfig) loadErrLogConfigAll(c []LogOutputConfig, cn *cron.Cron, errf
 	return lhs, nil
 }
 
-func (s *LogConfig) loadErrLogConfig(c LogOutputConfig, cn *cron.Cron, errfn func(error)) (core zapcore.Core, err error) {
+func (s *LogConfig) loadErrLogConfig(c LogOutputConfig, cn *cron.Cron, debug bool, errfn func(error)) (core zapcore.Core, err error) {
 	w, err := s.logWriter(c, cn, errfn)
 	if err != nil {
 		return nil, err
@@ -186,7 +186,11 @@ func (s *LogConfig) loadErrLogConfig(c LogOutputConfig, cn *cron.Cron, errfn fun
 			return nil, err
 		}
 	} else {
-		level = zapcore.InfoLevel // デフォルト
+		if debug {
+			level = zapcore.DebugLevel
+		} else {
+			level = zapcore.InfoLevel // デフォルト
+		}
 	}
 	core = zapcore.NewCore(encoder, writer, level)
 	return

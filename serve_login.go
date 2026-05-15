@@ -14,6 +14,8 @@ import (
 )
 
 type LoginConfig struct {
+	Revoke RevokeConfig `json:"revoke"`
+
 	//RawPublicKey  RawMessage      `json:"publickey"`
 	//RawPrivateKey RawMessage      `json:"privatekey"`
 	OAuth       OAuthConfig     `json:"oauth"`
@@ -172,25 +174,54 @@ func (r *Request) ClaimUnmarshal(obj any) error {
 }
 
 func (r *Request) userWithJWT() (uid, displayname string, writable bool, jwtbody []byte, err error) {
-	if r.cache.cachedLogin {
-		return r.cache.cachedUid, r.cache.cachedName, r.cache.cachedWritable, r.cache.cachedJWTBody, r.cache.cachedErr
-	}
-
-	r.cache.cachedUid, r.cache.cachedName, r.cache.cachedWritable, r.cache.cachedJWTBody, r.cache.cachedErr = r.user()
-	r.cache.cachedLogin = true
-	return r.cache.cachedUid, r.cache.cachedName, r.cache.cachedWritable, r.cache.cachedJWTBody, r.cache.cachedErr
-}
-
-func (r *Request) user() (uid, displayname string, writable bool, body []byte, err error) {
 	du := r.fiber.Query(".user")
 	if r.config.Debug && du != "" {
 		r.cache.authorizedBy = "debug"
 		return du, du, true, nil, nil
 	}
 
+	if r.cache.cachedLogin {
+		return r.cache.cachedUid, r.cache.cachedName, r.cache.cachedWritable, r.cache.cachedJWTBody, r.cache.cachedErr
+	}
+
+	jwt, writable, err := r.user()
+	if err != nil {
+		r.cache.cachedLogin = true
+		r.cache.cachedErr = err
+		return "", "", false, nil, r.cache.cachedErr
+	}
+
+	if jwt != nil {
+		for _, extopt := range r.server.extopts {
+			if extopt.OnAuthZ != nil {
+				jwt, err = extopt.OnAuthZ(r, jwt)
+				if err != nil {
+					r.cache.cachedLogin = true
+					r.cache.cachedErr = err
+					return "", "", false, nil, r.cache.cachedErr
+				}
+			}
+		}
+
+		r.cache.cachedLogin = true
+		r.cache.cachedUid = jwt.Body.Subject
+		r.cache.cachedName = jwt.Body.Name
+		r.cache.cachedWritable = writable
+		r.cache.cachedJWTBody = jwt.RawBody
+		return r.cache.cachedUid, r.cache.cachedName, r.cache.cachedWritable, r.cache.cachedJWTBody, r.cache.cachedErr
+	}
+
+	r.cache.cachedLogin = true
+	r.cache.cachedErr = ErrNotLoggedIn
+	return "", "", false, nil, ErrNotLoggedIn
+}
+
+func (r *Request) user() (jwt *cryptino.JSONWebToken, writable bool, err error) { //(uid, displayname string, writable bool, body []byte, err error) {
+
 	pub := r.config.Login.PublicKey
 	if pub == nil {
-		return "", "", false, nil, ErrNoPublicKey
+		return nil, false, ErrNoPublicKey
+		//return "", "", false, nil, ErrNoPublicKey
 	}
 
 	accessToken := ""
@@ -215,7 +246,8 @@ func (r *Request) user() (uid, displayname string, writable bool, body []byte, e
 			r.Logger().Debug("AccessToken Verify Error", zap.Error(err))
 		} else if oauthjwt.Body.Audience == r.config.Login.OAuth.JWTAudience {
 			r.cache.authorizedBy = r.config.Login.OAuth.JWTAudience
-			return oauthjwt.Body.Subject, oauthjwt.Body.Name, true, oauthjwt.RawBody, nil
+			return oauthjwt, true, nil
+			//return oauthjwt.Body.Subject, oauthjwt.Body.Name, true, oauthjwt.RawBody, nil
 		}
 	}
 
@@ -241,16 +273,21 @@ func (r *Request) user() (uid, displayname string, writable bool, body []byte, e
 					//r.Logger.Debug("CSRFToken Verify Error", zap.Error(err))
 				} else if csrfjwt.Body.Audience == r.config.Login.CSRFToken.JWTAudience && cookiejwt.Body.Subject == csrfjwt.Body.Subject {
 					r.cache.authorizedBy = r.config.Login.CSRFToken.JWTAudience
-					return cookiejwt.Body.Subject, cookiejwt.Body.Name, true, cookiejwt.RawBody, nil
+
+					return cookiejwt, true, nil
+					//return cookiejwt.Body.Subject, cookiejwt.Body.Name, true, cookiejwt.RawBody, nil
 				}
 			}
 
 			r.cache.authorizedBy = r.config.Login.LoginCookie.JWTAudience
-			return cookiejwt.Body.Subject, cookiejwt.Body.Name, false, cookiejwt.RawBody, nil
+
+			return cookiejwt, false, nil
+			//return cookiejwt.Body.Subject, cookiejwt.Body.Name, false, cookiejwt.RawBody, nil
 		}
 	}
 
-	return "", "", false, nil, ErrNotLoggedIn
+	return nil, false, ErrNotLoggedIn
+	//return "", "", false, nil, ErrNotLoggedIn
 }
 
 func (r *Request) SessionID() string {

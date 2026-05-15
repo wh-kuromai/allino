@@ -8,6 +8,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"mime/multipart"
+	"net/http"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/xid"
@@ -35,9 +37,10 @@ const (
 	REQUEST_CRON
 	REQUEST_JOB
 	REQUEST_CLI
+	REQUEST_STREAM
 )
 
-var requestTypeStr = []string{"virtual", "http", "ws", "cron", "job", "cli"}
+var requestTypeStr = []string{"virtual", "http", "ws", "cron", "job", "cli", "stream"}
 
 func (r RequestType) String() string {
 	return requestTypeStr[int(r)]
@@ -137,13 +140,21 @@ func (r *Request) SQL() *sql.DB {
 	return r.sql
 }
 
+func (r *Request) S3() *s3.Client {
+	return r.server.S3
+}
+
+func (r *Request) HttpClient() *http.Client {
+	return r.server.HttpClient
+}
+
 func (r *Request) Logger() *zap.Logger {
 	if r.loggerWith != nil {
 		return r.loggerWith
 	}
 
 	if !r.config.Log.NoRequestID {
-		r.loggerWith = r.logger.With(zap.String("request_id", r.RequestID()))
+		r.loggerWith = r.logger.With(zap.String("request_id", r.RequestID()), zap.String("from", r.cache.req_type.String()))
 	} else {
 		r.loggerWith = r.logger
 	}
@@ -168,7 +179,7 @@ func (r *Request) RequestID() string {
 	}
 
 	if rid == "" {
-		rid = r.cache.req_type.String() + ":" + xid.New().String()
+		rid = xid.New().String()
 	}
 
 	r.cache.requestid = rid

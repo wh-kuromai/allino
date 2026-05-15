@@ -83,6 +83,8 @@ func (s *Server) RegisterAllTypedHandler() {
 	}
 }
 
+var ErrServerError = NewCodeError(500, "server_error", "server error")
+
 func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r *Request, input T) (output U, err E)) *GenericTypedHandler[T, U, E] {
 	options := &option
 	if options.Package == "" {
@@ -187,11 +189,22 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 
 	var rw *GenericTypedHandler[T, U, E]
 	rw = &GenericTypedHandler[T, U, E]{
-		options:    options,
-		tpool:      tpool,
-		upool:      upool,
-		epool:      epool,
-		handlefunc: handlefunc,
+		options: options,
+		tpool:   tpool,
+		upool:   upool,
+		epool:   epool,
+		handlefunc: func(r *Request, input T) (output U, err error) {
+			defer func() {
+				// recover needed.
+				if rcv := recover(); rcv != nil {
+					r.logger.Error("panic on handler", zap.Any("panic", rcv), zap.ByteString("stack", debug.Stack()))
+					var zeroU U
+					output = zeroU
+					err = ErrServerError
+				}
+			}()
+			return handlefunc(r, input)
+		},
 		handler: func(r *Request) {
 			if options.ContentType != "" {
 				r.fiber.Set("Content-Type", options.ContentType)
@@ -200,20 +213,14 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 			var param T
 			var err error
 			// instantiate param if it is a pointer type
-			if newParamFn != nil {
+			if IsAny[T]() {
+			} else if newParamFn != nil {
 				param = newParamFn()
 				err = r.getAll(param, options.inputReflectPlan)
 			} else {
 				param = tDefault
-				//fmt.Print(param)
 				err = r.getAll(&param, options.inputReflectPlan)
 			}
-			//if options.inputType.Kind() == reflect.Ptr {
-			//	param = reflect.New(options.inputType.Elem()).Interface().(T)
-			//	err = r.GetAll(param)
-			//} else {
-			//	err = r.GetAll(&param)
-			//}
 
 			var resp U
 			if err == nil {
@@ -233,67 +240,10 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 
 				r.cache.input = param
 				if err == nil && !consumed {
-
-					func() {
-						defer func() {
-							// recover needed.
-							if rcv := recover(); rcv != nil {
-
-								r.logger.Warn("panic on handler", zap.Any("stack", rcv), zap.String("debug", string(debug.Stack())))
-								err = ErrServerError
-							}
-						}()
-
-						resp, err = rw.call_internal(r, param, false)
-					}()
-					//consumed, resp, err = cachedHandleFunc(r, handlefunc, options, param)
-					//if !consumed {
-					//	resp, err = handlefunc(r, param)
-					//}
+					resp, err = rw.call_internal(r, param, false)
 				}
 
 			}
-			/*
-				// AutoAuditLogger
-				autoaudit := false
-				switch r.config.Log.Audit.AutoAuditPolicy {
-				case AutoAuditAlways:
-					autoaudit = true
-				case AutoAuditLogin:
-					uid, _, _, _ := r.User()
-					if uid != "" {
-						autoaudit = true
-					}
-				}
-
-				if options.AutoAudit || autoaudit {
-					autoauditmsg := "autoaudit"
-					if options.AutoAuditMsg != "" {
-						autoauditmsg = options.AutoAuditMsg
-					}
-					if !isReallyNil(err) {
-						r.Audit(autoauditmsg, zap.Any("error", err))
-					} else {
-						var respAny any = resp
-						switch v := respAny.(type) {
-						case []byte:
-							if r.config.Log.Audit.AutoAuditBytesOutput {
-								r.Audit(autoauditmsg, zap.Binary("output", v))
-							} else {
-								r.Audit(autoauditmsg)
-							}
-						case string:
-							if r.config.Log.Audit.AutoAuditStringOutput {
-								r.Audit(autoauditmsg, zap.String("output", v))
-							} else {
-								r.Audit(autoauditmsg)
-							}
-						default:
-							r.Audit(autoauditmsg, zap.Any("output", v))
-						}
-					}
-				}
-			*/
 
 			// Response
 			if !isReallyNil(err) {
@@ -367,8 +317,6 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 	return rw
 }
 
-var ErrServerError = NewCodeError(500, "server_error", "server error")
-
 func IsAny[T any]() bool {
 	var t *T
 	var a *any
@@ -379,7 +327,7 @@ func IsAny[T any]() bool {
 
 type GenericTypedHandler[T, U any, E error] struct {
 	options    *HandlerOption
-	handlefunc func(r *Request, input T) (output U, err E)
+	handlefunc func(r *Request, input T) (output U, err error)
 	handler    func(r *Request)
 
 	tpool *ReflectPool[T]
@@ -425,6 +373,10 @@ func (rw *GenericTypedHandler[T, U, E]) Call(r *Request, input T) (output U, err
 func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromcall bool) (output U, err error) {
 	if rw.options.Session.Type != "" {
 		return rw.call_session(r, input, fromcall)
+	}
+
+	if r.server.callRedisStrategy.IsTarget(rw.options) {
+		return rw.call_stream(r, input, fromcall)
 	}
 
 	if rw.options != nil &&

@@ -38,7 +38,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_sticky(r *Request, input T) (output
 
 	var zeroU U
 	sessionName := rw.options.Session.Name
-	handler := r.server.Session.createSessionMap[sessionName]
+	handler := r.server.session.createSessionMap[sessionName]
 
 	c := r.fiber
 

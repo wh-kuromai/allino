@@ -36,8 +36,8 @@ type SessionConfig struct {
 	serveridMu sync.Mutex `json:"-"`
 }
 
-func (c *SessionConfig) setup(sv *Server) (*SessionManager, error) {
-	s := &SessionManager{
+func (c *SessionConfig) setup(sv *Server) (*sessionManager, error) {
+	s := &sessionManager{
 		createSessionMap:   make(map[string]*GenericTypedHandler[*CreateSessionInput, *CreateSessionOutput, error]),
 		sessionStore:       make(map[string]*stickySessionEntry),
 		resourceConsumeMap: make(map[string]int),
@@ -52,21 +52,21 @@ var SessionExtension = NewExtension[any, any](
 	&ExtOption{
 		OnHandlerInit: func(s *Server, virtual *Request, opt *HandlerOption) (err error) {
 			if opt.Session.Type == "sticky" {
-				if s.Session == nil {
-					s.Session, err = s.Config.Session.setup(s)
+				if s.session == nil {
+					s.session, err = s.Config.Session.setup(s)
 					if err != nil {
 						return err
 					}
 				}
 
-				s.Session.addSessionGroup(s, opt.Session.Name)
+				s.session.addSessionGroup(s, opt.Session.Name)
 			}
 			return nil
 		},
 	},
 )
 
-type SessionManager struct {
+type sessionManager struct {
 	// immutable
 	createSessionMap map[string]*GenericTypedHandler[*CreateSessionInput, *CreateSessionOutput, error]
 
@@ -87,7 +87,7 @@ type CreateSessionOutput struct {
 	Token string `json:"token"`
 }
 
-func (s *SessionManager) addSessionGroup(sv *Server, name string) {
+func (s *sessionManager) addSessionGroup(sv *Server, name string) {
 	_, ok := s.createSessionMap[name]
 	if ok {
 		return
@@ -114,15 +114,15 @@ func (s *SessionManager) addSessionGroup(sv *Server, name string) {
 				expireAt:  time.Now().Add(r.config.Session.Expire),
 			}
 
-			r.server.Session.dequeueMu.Lock()
-			defer r.server.Session.dequeueMu.Unlock()
-			conresult := r.server.Session.entry_consume(r, entry)
+			r.server.session.dequeueMu.Lock()
+			defer r.server.session.dequeueMu.Unlock()
+			conresult := r.server.session.entry_consume(r, entry)
 			if conresult == CONSUME_OVERFLOW {
 				r.MarkRequeue()
 				return nil, NewError("resource full error")
 			}
 
-			r.server.Session.sessionStore[entry.sid] = entry
+			r.server.session.sessionStore[entry.sid] = entry
 
 			if conresult == CONSUME_FULL {
 				r.server.jobManager.resourcelockedHandlers.Add(encodeHandlerName(handler.options))
@@ -157,7 +157,7 @@ const (
 	CONSUME_OVERFLOW
 )
 
-func (s *SessionManager) entry_consume(r *Request, entry *stickySessionEntry) int {
+func (s *sessionManager) entry_consume(r *Request, entry *stickySessionEntry) int {
 	if len(entry.use) == 0 {
 		return CONSUME_OK
 	}
@@ -192,7 +192,7 @@ func (s *SessionManager) entry_consume(r *Request, entry *stickySessionEntry) in
 	return result
 }
 
-func (s *SessionManager) entry_free(sv *Server, entry *stickySessionEntry) int {
+func (s *sessionManager) entry_free(sv *Server, entry *stickySessionEntry) int {
 	if len(entry.use) == 0 {
 		return CONSUME_OK
 	}

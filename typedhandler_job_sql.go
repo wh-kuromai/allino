@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/wh-kuromai/allino/internal/ema"
+	"github.com/wh-kuromai/allino/internal/timewheel"
 	"go.uber.org/zap"
 )
 
@@ -28,7 +30,7 @@ var sqlStatusCodeStrings = []string{
 	"error",
 }
 
-type jobconsumer = func(r *Request, handler string, injson []byte, direct bool, infunc func(input any) error) (key string, outjson []byte, err []byte, syserr error)
+type jobconsumer = func(r *Request, handler, version string, injson []byte, direct bool, infunc func(input any) error) (key string, outjson []byte, err []byte, syserr error)
 
 type callSQLStrategy struct {
 	name     string
@@ -288,7 +290,7 @@ func (c *callSQLStrategy) Dequeue(
 	ctx context.Context,
 	handlers []string,
 	leaseDuration time.Duration,
-	ema *EMACalculator,
+	ema *ema.EMACalculator,
 ) (jt JobTask, err error) {
 	var key string
 	var handler string
@@ -598,7 +600,7 @@ func (c *callSQLStrategy) Wait(
 	ctx context.Context,
 	key string,
 	volatile bool,
-	tw *TimeWheel,
+	tw *timewheel.TimeWheel,
 ) (ji JobInfo, output []byte, err []byte, syserr error) {
 	var zeroJ JobInfo
 
@@ -714,6 +716,10 @@ func (c *callSQLStrategy) Done(
 	now := time.Now()
 
 	var err error
+	if injson != nil {
+
+	}
+
 	if meta.TTL != nil {
 		_, err = c.db.ExecContext(ctx, `
 	INSERT INTO executions

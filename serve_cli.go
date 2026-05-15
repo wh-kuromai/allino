@@ -127,10 +127,11 @@ func NewCLI(config *Config, extconfig ...map[string]any) *CLI {
 				}
 
 				if s.jobManager != nil {
-					s.jobManager.WaitForJob(s.appctx, callSQLstrategy, key, func(doneCount, errCount, total int) {
+					s.jobManager.WaitForJob(s.appctx, s.callSQLStrategy, key, func(doneCount, errCount, total int) {
 						fmt.Printf("----> Progress %.0f%% (%d complete, %d error, %d total)\n", 100*float64(doneCount+errCount)/float64(total), doneCount, errCount, total)
 						//pb.Progress(float64(doneCount+errCount)/float64(total), doneCount+errCount, total)
 					})
+
 				}
 
 				time.Sleep(300 * time.Millisecond)

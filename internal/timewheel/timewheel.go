@@ -1,4 +1,4 @@
-package allino
+package timewheel
 
 import (
 	"context"
@@ -6,18 +6,6 @@ import (
 	"sync/atomic"
 	"time"
 )
-
-type TimeWheelConfig struct {
-	Slot         int           `json:"slots"`
-	TickInterval time.Duration `json:"tick_interval"`
-}
-
-func (s *TimeWheelConfig) setup(ctx context.Context) *TimeWheel {
-	timewheel := newTWWheel(s.Slot, s.TickInterval)
-	go timewheel.Run(ctx)
-
-	return timewheel
-}
 
 // 精度を 0.1s (100ms) に設定
 //const tickInterval = 100 * time.Millisecond
@@ -40,7 +28,7 @@ type TimeWheel struct {
 	tickInterval time.Duration
 }
 
-func newTWWheel(slotCount int, interval time.Duration) *TimeWheel {
+func New(slotCount int, interval time.Duration) *TimeWheel {
 	if slotCount <= 0 {
 		slotCount = 32
 	}

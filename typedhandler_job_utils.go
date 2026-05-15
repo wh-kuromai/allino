@@ -163,6 +163,8 @@ var ErrJobErrorDecodeFailed = NewError("failed to decode job error")
 var ErrJobInputEncodeFailed = NewError("failed to encode job input")
 var ErrJobInputDecodeFailed = NewError("failed to decode job input")
 
+var ErrStreamInputDecodeFailed = NewError("failed to decode stream input")
+
 type JobPendingError struct {
 	Status int    `json:"-"`
 	JobID  string `json:"jobid,omitempty"`

@@ -7,6 +7,8 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"go.uber.org/zap"
+
+	"github.com/wh-kuromai/allino/internal/randcron"
 )
 
 //type TypedRouter struct {
@@ -17,15 +19,21 @@ import (
 
 func (r *Server) TypedHandle(th TypedHandler) {
 	if th.Options().Cron != "" {
-		eid, err := r.Cron.AddFunc(th.Options().Cron, func() {
-			rr := NewRequest(r, nil)
-			rr.cache.req_type = REQUEST_CRON
-			th.HandleCall(rr, nil)
-		})
-		if err == nil {
-			th.Options().cronid = eid
+
+		rcron, err := randcron.Expand(th.Options().Cron, r.ServerID())
+		if err != nil {
+			r.Logger.Error("cron error", zap.String("spec", rcron), zap.String("handler", th.Options().Name))
 		} else {
-			r.Logger.Error("cron error", zap.String("spec", th.Options().Cron), zap.String("handler", th.Options().Name))
+			eid, err := r.Cron.AddFunc(rcron, func() {
+				rr := NewRequest(r, nil)
+				rr.cache.req_type = REQUEST_CRON
+				th.HandleCall(rr, nil)
+			})
+			if err == nil {
+				th.Options().cronid = eid
+			} else {
+				r.Logger.Error("cron error", zap.String("spec", rcron), zap.String("handler", th.Options().Name))
+			}
 		}
 	}
 

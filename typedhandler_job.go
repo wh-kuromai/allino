@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wh-kuromai/allino/internal/ema"
+	"github.com/wh-kuromai/allino/internal/timewheel"
 	"go.uber.org/zap"
 )
 
@@ -18,6 +20,10 @@ const (
 	JOBMODE_ONCE     = "once"
 	JOBMODE_MEMOIZED = "memoized"
 	JOBMODE_DISPATCH = "dispatch"
+
+	JOBMODE_FANOUT    = "fanout"
+	JOBMODE_REPLAY    = "replay"
+	JOBMODE_REPLAYALL = "replayall"
 
 	//JOB_BACKEND_SQL = "sql"
 	//JOB_BACKEND_REDIS = "backend_redis"
@@ -33,8 +39,9 @@ type JobConfig struct {
 	WaitTimeout     time.Duration `json:"wait_timeout"`
 	WaitInterval    time.Duration `json:"wait_interval"`
 
-	RedisKeyPrefix   string `json:"redis_key_prefix"`
-	RedisStreamGroup string `json:"redis_stream_group"`
+	RedisKeyPrefix            string `json:"redis_key_prefix"`
+	RedisStreamGroupPrefix    string `json:"redis_stream_group_prefix"`
+	RedisStreamConsumerPrefix string `json:"redis_stream_consumer_prefix"`
 }
 
 type JobOption struct {
@@ -46,76 +53,46 @@ type JobOption struct {
 	CacheExpire   time.Duration
 	Interval      time.Duration
 
-	OnCacheUpgrade func(version string, updated_at time.Time, old_output []byte) (TransformAction, any, error) `json:"-"`
+	OnInputUpgrade  func(version string, old_input_at time.Time, old_input []byte) (bool, any)                     `json:"-"`
+	OnOutputUpgrade func(version string, old_output_at time.Time, old_output, old_error []byte) (bool, any, error) `json:"-"`
 
-	//Backend string
-
-	callstrategy callStrategy `json:"-"`
+	StreamTTL    time.Duration
+	OnStreamInit func() (start string, err error) `json:"-"`
+	//callSQLStrategy   *callSQLStrategy
+	//callRedisStrategy *callRedisStrategy
 }
-
-type TransformAction int
-
-const (
-	TransformActionNone TransformAction = iota
-	TransformActionUse
-	TransformActionFallback
-	TransformActionFail
-)
 
 var JobExtension = NewExtension[any, any](
 	"job",
 	&ExtOption{
-		OnHandlerInit: func(s *Server, virtual *Request, opt *HandlerOption) error {
-
-			switch opt.JobMode {
-			case JOBMODE_ASYNC:
-				opt.Job.Async = true
-			case JOBMODE_CACHE:
-				opt.Job.Cache = true
-			case JOBMODE_DEDUPE:
-				opt.Job.Dedupe = true
-			case JOBMODE_ONCE:
-				opt.Job.Dedupe = true
-				opt.Job.Cache = true
-				opt.Job.CacheErrOnHit = true
-			case JOBMODE_MEMOIZED:
-				opt.Job.Dedupe = true
-				opt.Job.Cache = true
-			case JOBMODE_DISPATCH:
-				opt.Job.Async = true
-				opt.Job.Cache = true
+		OnHandlerInit: func(s *Server, virtual *Request, opt *HandlerOption) (err error) {
+			err = callSQLInit(s, opt)
+			if err != nil && !s.Config.Log.Silent {
+				s.Logger.Error(
+					"job OnHandlerInit failed",
+					zap.Error(err),
+				)
 			}
-
-			if opt.JobMode != "" {
-				//hbackend := mergeSingle(s.Config.JobConfig.Backend, opt.Job.Backend)
-				if s.jobManager == nil {
-					s.jobManager = newJobManager()
-				}
-
-				if callSQLstrategy == nil {
-					callSQLstrategy = newcallSQLStrategy(s)
-					err := callSQLstrategy.Init(virtual.Context(), (s.Config.SQL.AllowMigrate != nil && *s.Config.SQL.AllowMigrate))
-					if err != nil && !s.Config.Log.Silent {
-						s.Logger.Error("job system error", zap.String("component", "register"), zap.Error(err))
-					}
-					s.jobManager.WorkerInit(callSQLstrategy, s)
-
-					// Reaping
-					s.TimeWheel.Add(s.Config.JobConfig.LeaseDuration, func() bool {
-						err = callSQLstrategy.Reaping(s.appctx)
-						if err != nil && !s.Config.Log.Silent {
-							s.Logger.Error("job system error", zap.String("component", "reaping"), zap.Error(err))
-						}
-						return true
-					})
-				}
-
-				opt.Job.callstrategy = callSQLstrategy
-				s.jobManager.handlers.Add(encodeHandlerName(opt))
+			err = callRedisInit(s, opt)
+			if err != nil && !s.Config.Log.Silent {
+				s.Logger.Error(
+					"redis stream OnHandlerInit failed",
+					zap.Error(err),
+				)
 			}
-
 			s.handlerOptMap[encodeHandlerName(opt)] = opt
 			return nil
+		},
+
+		OnServe: func(s *Server, virtual *Request) (err error) {
+			err = callRedisInitEnd(s)
+			if err != nil && !s.Config.Log.Silent {
+				s.Logger.Error(
+					"redis stream OnServe failed",
+					zap.Error(err),
+				)
+			}
+			return
 		},
 
 		OnShutdown: func(s *Server, virtual *Request) error {
@@ -159,7 +136,7 @@ func call_direct(sv *Server, r *Request, handler string, injson []byte, infunc f
 	r.cache.parentjobid = jec.JobID()
 	r.cache.rootjobid = jec.JobID()
 
-	return opt.consumer(r, encodeHandlerName(opt), injson, true, infunc)
+	return opt.consumer(r, encodeHandlerName(opt), handlerVersion(opt), injson, true, infunc)
 }
 
 func unmarshalfnMake[U any, E error](r *Request, opt *HandlerOption, upool *ReflectPool[U], epool *ReflectPool[E], handler string) func(ji JobInfo, outjson []byte, errjson []byte, serr error) (output U, err error, syserr error) {
@@ -173,47 +150,40 @@ func unmarshalfnMake[U any, E error](r *Request, opt *HandlerOption, upool *Refl
 			(ji.Meta.TTL != nil && now.After(*ji.Meta.TTL)) {
 
 			// try cache transform
-			if opt.Job.OnCacheUpgrade != nil && outjson != nil && errjson == nil {
+			if opt.Job.OnOutputUpgrade != nil && outjson != nil && errjson == nil {
 
-				result, newout, newerr := opt.Job.OnCacheUpgrade(ji.Meta.Version, ji.UpdatedAt, outjson)
-				switch result {
-				case TransformActionUse:
+				ok, newout, newerr := opt.Job.OnOutputUpgrade(ji.Meta.Version, ji.UpdatedAt, outjson, errjson)
+				if ok {
 					newoutput, ok := newout.(U)
 					if ok {
 						ji.Meta.Version = handlerVersion(opt)
 						ji.UpdatedAt = now
-						newoutjson, _, newsyserr := marshalOutputSet[U, E](newoutput, nil)
+						newoutjson, newerrjson, newsyserr := marshalOutputSet[U, E](newoutput, newerr)
 						if newsyserr != nil {
 							if !r.config.Log.Silent {
-								r.logger.Info("cache transform failed: marshal error", zap.String("handler", handler), zap.Error(newsyserr))
+								r.logger.Error("cache transform failed: marshal error", zap.String("handler", handler), zap.Error(newsyserr))
 							}
 							return zeroU, FatalTransformFailed, nil
 						}
-
 						// update cache and return new output
-						syserr = opt.Job.callstrategy.Done(r.Context(), encodeHandlerName(opt), &ji.Meta, ji.JobID, nil, newoutjson, nil)
+						syserr = r.server.callSQLStrategy.Done(r.Context(), encodeHandlerName(opt), &ji.Meta, ji.JobID, nil, newoutjson, newerrjson)
 						if syserr != nil {
 							if !r.config.Log.Silent {
-								r.logger.Info("cache transform failed: done error", zap.String("handler", handler), zap.Error(newsyserr))
+								r.logger.Error("cache transform failed: done error", zap.String("handler", handler), zap.Error(newsyserr))
 							}
 							return zeroU, FatalTransformFailed, nil
 						}
-						return newoutput, nil, nil
+						return newoutput, newerr, nil
 					}
 					if !r.config.Log.Silent {
-						r.logger.Info("cache transform failed: output type not match", zap.String("handler", handler))
+						r.logger.Error("cache transform failed: output type not match", zap.String("handler", handler))
 					}
 					return zeroU, FatalTransformFailed, nil
 
-				case TransformActionFallback:
-					// return syserr -> cache hit failed -> fallback to execute.
-					return zeroU, nil, ErrJobNotFound
-				case TransformActionFail:
-					// respond newerr
-					return zeroU, newerr, nil
 				}
 
-				return zeroU, FatalTransformFailed, nil
+				// return syserr -> cache hit failed -> fallback to execute.
+				return zeroU, nil, ErrJobNotFound
 			}
 
 			// fallback if no transformer set.
@@ -230,7 +200,7 @@ func unmarshalfnMake[U any, E error](r *Request, opt *HandlerOption, upool *Refl
 		}
 
 		if !r.config.Log.Silent {
-			r.logger.Info("job cache hit", zap.String("handler", handler))
+			r.logger.Debug("job cache hit", zap.String("handler", handler))
 		}
 		return output, err, nil
 	}
@@ -244,6 +214,8 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 	asyncExec := fromcall && rw.options.Job.Async
 	dedupeExec := rw.options.Job.Dedupe
 	cacheExec := rw.options.Job.Cache
+
+	c := r.server.callSQLStrategy
 
 	var jec = jobExecutionContext{
 		r:        r,
@@ -264,7 +236,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 
 	unmarshalfn := unmarshalfnMake[U, E](r, opt, rw.upool, rw.epool, jec.Handler())
 	if cacheExec {
-		output, err, syserr = unmarshalfn(opt.Job.callstrategy.Hit(r.Context(), jec.Handler(), opt.Job.CacheExpire != 0, jec.JobID(), jec.InputJSON()))
+		output, err, syserr = unmarshalfn(c.Hit(r.Context(), jec.Handler(), opt.Job.CacheExpire != 0, jec.JobID(), jec.InputJSON()))
 
 		if syserr == nil {
 			return output, err
@@ -274,7 +246,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 	var aquiredLock bool
 	if asyncExec {
 		var enqueued bool
-		enqueued, err = opt.Job.callstrategy.Enqueue(
+		enqueued, err = c.Enqueue(
 			r.Context(),
 			jec.Handler(),
 			jec.JobMeta(statusQueued),
@@ -283,7 +255,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 			0)
 		if err != nil {
 			if !r.config.Log.Silent {
-				r.logger.Info("job system error", zap.String("component", "requeue.enqueue"), zap.Error(err))
+				r.logger.Error("job system error", zap.String("component", "requeue.enqueue"), zap.Error(err))
 			}
 			// db error etc.
 			return zeroU, FatalBackendError.With(err)
@@ -291,14 +263,14 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 
 		if enqueued {
 			if !r.config.Log.Silent {
-				r.logger.Info("job queued", zap.String("handler", jec.Handler()))
+				r.logger.Debug("job queued", zap.String("handler", jec.Handler()))
 			}
 			return zeroU, NewJobPendingError(jec.JobID(), "job accepted")
 		}
 		return zeroU, NewJobPendingError(jec.JobID(), "job not finished yet")
 
 	} else if dedupeExec {
-		aquiredLock, err = opt.Job.callstrategy.Enqueue(
+		aquiredLock, err = c.Enqueue(
 			r.Context(),
 			jec.Handler(),
 			jec.JobMeta(statusLeased),
@@ -307,7 +279,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 			0)
 		if err != nil {
 			if !r.config.Log.Silent {
-				r.logger.Info("job system error", zap.String("component", "requeue.enqueue"), zap.Error(err))
+				r.logger.Error("job system error", zap.String("component", "requeue.enqueue"), zap.Error(err))
 			}
 			// db error etc.
 			return zeroU, FatalBackendError.With(err)
@@ -315,7 +287,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 
 		if !aquiredLock {
 			if cacheExec {
-				output, err, syserr = unmarshalfn(opt.Job.callstrategy.Hit(r.Context(), jec.Handler(), opt.Job.CacheExpire != 0, jec.JobID(), jec.InputJSON()))
+				output, err, syserr = unmarshalfn(c.Hit(r.Context(), jec.Handler(), opt.Job.CacheExpire != 0, jec.JobID(), jec.InputJSON()))
 				if syserr == nil {
 					return output, err
 				}
@@ -323,14 +295,14 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 				// if job is not finished, wait it
 				jnferr, ok := syserr.(*JobPendingError)
 				if ok {
-					output, err, syserr = unmarshalfn(opt.Job.callstrategy.Wait(r.Context(), jnferr.JobID, rw.options.Job.CacheExpire != 0, r.server.TimeWheel))
+					output, err, syserr = unmarshalfn(c.Wait(r.Context(), jnferr.JobID, rw.options.Job.CacheExpire != 0, r.server.TimeWheel))
 					if syserr == nil {
 						return output, err
 					}
 				}
 
 				if !r.config.Log.Silent {
-					r.logger.Info("job lost", zap.String("handler", jec.Handler()), zap.Error(syserr))
+					r.logger.Error("job lost", zap.String("handler", jec.Handler()), zap.Error(syserr))
 				}
 				return zeroU, FatalBackendError.With(syserr)
 				// cache not found or expired
@@ -345,10 +317,10 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 		// Lock aquired
 		leaset := r.config.JobConfig.LeaseDuration
 		task := r.server.TimeWheel.Add(time.Duration(leaset/2), func() bool {
-			err := opt.Job.callstrategy.LeaseUpdate(r.Context(), jec.JobID(), leaset)
+			err := c.LeaseUpdate(r.Context(), jec.JobID(), leaset)
 			//err := s.LeaseUpdate(sv.appctx, jobn.key, leaset)
 			if err != nil && !r.Config().Log.Silent {
-				r.logger.Info("job system error", zap.String("component", "leaseupdate"), zap.Error(err))
+				r.logger.Error("job system error", zap.String("component", "leaseupdate"), zap.Error(err))
 			}
 			return true
 		})
@@ -362,7 +334,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 			outJSON, errJSON, syserr := marshalOutputSet[U, E](output, err)
 			if syserr == nil {
 
-				err := opt.Job.callstrategy.Done(
+				err := c.Done(
 					r.Context(),
 					jec.Handler(),
 					jec.JobMeta(statusDone),
@@ -371,20 +343,20 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 					outJSON,
 					errJSON)
 				if err != nil && !r.config.Log.Silent {
-					r.logger.Info("job system error", zap.String("component", "done"), zap.Error(err))
+					r.logger.Error("job system error", zap.String("component", "done"), zap.Error(err))
 				}
 			}
 		}
 	} else if dedupeExec {
-		err := opt.Job.callstrategy.Free(r.Context(), jec.JobID())
+		err := c.Free(r.Context(), jec.JobID())
 		if err != nil && !r.config.Log.Silent {
-			r.logger.Info("job system error", zap.String("component", "free"), zap.Error(err))
+			r.logger.Error("job system error", zap.String("component", "free"), zap.Error(err))
 		}
 	}
 
 	// mark requeue
 	if r.memo.jobabortctrl == JOB_ABORT_REQUEUE || r.memo.jobabortctrl == JOB_ABORT_REQUEUE_AT {
-		_, err = opt.Job.callstrategy.Enqueue(
+		_, err = c.Enqueue(
 			r.Context(),
 			jec.Handler(),
 			jec.JobMeta(jec.EnqueueStatus()),
@@ -393,11 +365,11 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 			requeueDelay(r))
 		if err != nil {
 			if !r.config.Log.Silent {
-				r.logger.Info("job system error", zap.String("component", "markrequeue"), zap.Error(err))
+				r.logger.Error("job system error", zap.String("component", "markrequeue"), zap.Error(err))
 			}
 		} else {
 			if !r.config.Log.Silent {
-				r.logger.Info("job requeued", zap.String("handler", jec.Handler()), zap.String("requestid", jec.JobID()))
+				r.logger.Debug("job requeued", zap.String("handler", jec.Handler()), zap.String("requestid", jec.JobID()))
 			}
 		}
 
@@ -407,11 +379,27 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 }
 
 // called from CLI or Worker
-func (rw *GenericTypedHandler[T, U, E]) job_consume(r *Request, handler string, injson []byte, direct bool, infunc func(input any) error) (key string, outputz []byte, errjsonz []byte, syserr error) {
+func (rw *GenericTypedHandler[T, U, E]) job_consume(r *Request, handler, version string, injson []byte, direct bool, infunc func(input any) error) (key string, outputz []byte, errjsonz []byte, syserr error) {
 
-	input, innererr := rw.tpool.New(func(a any) error {
-		return json.Unmarshal(injson, a)
-	})
+	var input T
+	var innererr error
+	updated := false
+	if hasMajorOrMinorVersionDiff(version, handlerVersion(rw.options)) {
+		var updatein any
+		updated, updatein = rw.options.Job.OnInputUpgrade(version, time.Now(), injson)
+		if updated {
+			input2, ok2 := updatein.(T)
+			if ok2 {
+				input = input2
+			}
+		}
+	}
+
+	if !updated {
+		input, innererr = rw.tpool.New(func(a any) error {
+			return json.Unmarshal(injson, a)
+		})
+	}
 
 	//var innererr error
 	//input := NewRefOf[T](func(a any) {
@@ -422,6 +410,9 @@ func (rw *GenericTypedHandler[T, U, E]) job_consume(r *Request, handler string, 
 	}
 
 	key = encodeJobID(handler, input, injson, "")
+	if r.cache.requestid == "" {
+		r.cache.requestid = key
+	}
 
 	// fill SelfDiscovery.
 	if rw.options.hasSelfDiscovery {
@@ -471,31 +462,15 @@ func (rw *GenericTypedHandler[T, U, E]) JobResult(r *Request, jobid string) (out
 	}
 
 	unmarshalfn := unmarshalfnMake[U, E](r, rw.options, rw.upool, rw.epool, jid.Handler)
-	output, err, syserr = unmarshalfn(rw.options.Job.callstrategy.Result(r.Context(), jobid, rw.options.Job.CacheExpire != 0))
+	output, err, syserr = unmarshalfn(r.server.callSQLStrategy.Result(r.Context(), jobid, rw.options.Job.CacheExpire != 0))
 
 	if syserr == nil {
 		return output, err
 	}
 
 	if !r.config.Log.Silent {
-		r.logger.Info("job system error", zap.String("component", "jobresult"), zap.Error(syserr))
+		r.logger.Error("job system error", zap.String("component", "jobresult"), zap.Error(syserr))
 	}
-
-	/*
-		var ji JobInfo
-		var syserr error
-		ji, output, err, syserr = unmarshalOutputSet[U, E](rw.options.Job.callstrategy.Result(r.Context(), jobid))
-		if syserr == nil {
-			if !hasMajorOrMinorVersionDiff(ji.Meta.Version, handlerVersion(rw.options)) {
-				return output, err
-			}
-			return zeroU, FatalInvalidCacheError
-		} else {
-			if !r.config.Log.Silent {
-				r.logger.Info("job system error", zap.String("component", "jobresult"), zap.Error(syserr))
-			}
-		}
-	*/
 	return zeroU, syserr
 }
 
@@ -506,7 +481,7 @@ type callStrategy interface {
 	Enqueue(ctx context.Context, handler string, meta *JobMeta, key string, injson []byte, delay_sec int) (enqueud bool, err error)
 
 	// Pull queued job.
-	Dequeue(ctx context.Context, handlers []string, lease_dur time.Duration, ema *EMACalculator) (jt JobTask, err error)
+	Dequeue(ctx context.Context, handlers []string, lease_dur time.Duration, ema *ema.EMACalculator) (jt JobTask, err error)
 
 	// Search lease expired job and requeue.
 	Reaping(ctx context.Context) (err error)
@@ -524,7 +499,7 @@ type callStrategy interface {
 	Done(ctx context.Context, handler string, meta *JobMeta, key string, injson []byte, outjson []byte, errjson []byte) (err error)
 
 	// Find completed job. (blocking)
-	Wait(ctx context.Context, key string, volatile bool, tw *TimeWheel) (meta JobInfo, outjson []byte, errjson []byte, err error)
+	Wait(ctx context.Context, key string, volatile bool, tw *timewheel.TimeWheel) (meta JobInfo, outjson []byte, errjson []byte, err error)
 
 	// Find completed job. (non-blocking)
 	Result(ctx context.Context, key string, volatile bool) (meta JobInfo, outjson []byte, errjson []byte, err error)

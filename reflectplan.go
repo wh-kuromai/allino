@@ -16,6 +16,7 @@ const (
 	tagHeader
 	tagRegex
 	tagCli
+	tagClass
 	tagSize
 )
 
@@ -29,6 +30,7 @@ var tagKindStrings = []string{
 	"header",
 	"regex",
 	"cli",
+	"class",
 }
 
 func (p tagKind) String() string {

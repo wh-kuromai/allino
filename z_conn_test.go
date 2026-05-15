@@ -24,7 +24,7 @@ func TestPingHandler(t *testing.T) {
 	//s.ServeHTTP(w, req)
 
 	if w.StatusCode != 200 {
-		t.Fatalf("Expected 200, got %d", w.StatusCode)
+		t.Fatalf("Expected 200, got %d: %s", w.StatusCode, string(bodybuf))
 	}
 
 	var resp allino.APIResponse[handlers.PingOutput]

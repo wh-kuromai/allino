@@ -15,9 +15,10 @@ import (
 )
 
 var s = allino.NewTestServer(&allino.Config{
-	//Redis: allino.RedisConfig{
-	//	URL: "redis://localhost:6379/0",
-	//},
+	Debug: true,
+	Redis: allino.RedisConfig{
+		URL: "redis://localhost:6379/0",
+	},
 	SQL: allino.SQLConfig{
 		Driver: "sqlite",
 		//DSN:    "./tmp/test_sqlite" + xid.New().String() + ".db", //"postgresql://testuser@localhost:5432/testdb?sslmode=disable",

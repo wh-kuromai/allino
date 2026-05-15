@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/spf13/cobra"
+	"github.com/wh-kuromai/cryptino"
 )
 
 var extensionList []extendable
@@ -21,6 +22,7 @@ type ExtOption struct {
 	OnHandlerInit   func(s *Server, virtual *Request, opt *HandlerOption) error
 	OnServe         func(s *Server, virtual *Request) error
 	OnShutdown      func(s *Server, virtual *Request) error
+	OnAuthZ         func(r *Request, jwt *cryptino.JSONWebToken) (*cryptino.JSONWebToken, error)
 	RequestHandler  func(r *Request, opt *HandlerOption, input any) (consumed bool, err error)
 	ResponseHandler func(r *Request, opt *HandlerOption, output any) (consumed bool)
 	ErrorHandler    func(r *Request, opt *HandlerOption, err error) (consumed bool)

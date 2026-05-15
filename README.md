@@ -189,18 +189,21 @@ You can paste the following after your API idea, and get working `allino` code i
 //     - If returning RedirectError, sends err.StatusCode and redirects to err.Location.
 package allino //github.com/wh-kuromai/allino
 func NewTypedHandler[T, U any, E error](options HandlerOption, handlefunc func(r *Request, input T) (output U, err E)) *GenericTypedHandler[T, U, E]
-func NewTypedAPI[T, U any, E error](path string, handlefunc func(r *Request, input T) (output U, err E)) *GenericTypedHandler[T, U, E] // NewTypedHandler with options.ContentType = application/json
-func NewTypedUI[T, U any, E error](path string, handlefunc func(r *Request, input T) (output U, err E)) *GenericTypedHandler[T, U, E] // NewTypedHandler with options.ContentType = text/html
 type Request struct {}
-func (r *Request) Fiber() *fiber.Ctx
-func (r *Request) Logger() *zap.Logger // use this for logging, no need to check nil.
-func (r *Request) Redis() redis.UniversalClient // go-redis Client, no need to check nil.
-func (r *Request) SQL() *sql.DB // pre-Opened sql Client, no need to check nil. (use `r.SQL` only if requested)
+func (r *Request) Fiber() *fiber.Ctx // only avaiable via http request. (nil if virtual)
+func (r *Request) Logger() *zap.Logger // use this for logging, inited via config.
+func (r *Request) Redis() redis.UniversalClient // go-redis Client, inited via config.
+func (r *Request) SQL() *sql.DB // pre-Opened sql Client, inited via config.
+func (r *Request) S3() *s3.Client // AWS SDK v2 S3 client, inited via config. (MinIO/AWS)
+func (r *Request) HttpClient() *http.Client // inited shared http client.
 // User() checks and validates using Cookie, Authorization header, X-CSRF-Token header or `csrf_token` form data.
 // Returns uid (database key), display name, and sets writable=true only when a write-intent credential is presented 
 // (e.g., Authorization header or an explicit token in form/query/header) and CSRF validation succeeds. 
 // Otherwise the user is treated as read-only. 
 func (r *Request) User() (uid, displayname string, writable bool, err error)
+// RequestID() returns unique generated xid, X-Request-ID header if config.trustedproxy.trustXRequestID is true,
+// async/dispatch JobID, or fanout/replay/replayall redis stream MessageID.
+func (r *Request) RequestID() string
 // SessionID() returns the session ID from the guest cookie.
 // If the cookie is missing, it generates a new ID and sets it via fiber.Ctx.
 func (r *Request) SessionID() string
@@ -238,12 +241,17 @@ type HandlerOption struct {
 	HTMLTemplate       string // html/template text
 	OnInit     func(s *Server, virtual *Request) error // Init code for this handler, use Request for DB or Logger.
 	OnShutdown func(s *Server, virtual *Request) error // Finalize code for this handler, use Request for DB or Logger.
-  
+
   Internal bool // If true, this handler is not exposed as an HTTP endpoint.
   Name    string // Logical name of this handler. Required when using Job mode.
   Version string // Semantic version of the handler (e.g. "1.0.0"). Optional.
 
-  Session allino.Session
+  Class string // Make this handler class method.
+
+  // Cron expression to schedule this handler.
+  // custom `?` specifier for random number, `N-M?` for random number between N and M.
+  Cron string 
+
   // JobMode defines the execution behavior of this handler.
   // Note: Certain modes require the handler to be idempotent. Allino caches/stores
   // results using a key: Name + Version + hash(input).
@@ -253,33 +261,63 @@ type HandlerOption struct {
   //   "dedupe"     : Ensures only one execution runs concurrently for the same input; returns allino.ErrJobDuplicated if dupulicated. (Requires idempotency)
   //   "once"       : Ensures the handler runs only once per unique input; Subsequent calls return allino.ErrJobDuplicated. (Requires idempotency)
   //   "memoized"   : Ensures the handler runs only once per unique input; Subsequent calls wait complete and return cached result. (Requires idempotency)
+  //
+  // Async job mode:
   //   "async"      : Runs the handler asynchronously. (Internal=true only)
   //   "dispatch"   : Hybrid of Async + Cache. Returns a cached result synchronously if found; otherwise, enqueues as 'async'. (Requires idempotency)
+  //
+  // Broadcast job mode:
+  //   "fanout"    : deliver new jobs, retains last node's processed position.
+  //   "replay"    : replay all jobs, retains last node's processed position.
+  //   "replayall" : replay all jobs every restart. (for in-memory state)
   JobMode string
   Job JobOption
-  Cron string // Cron expression to schedule this handler.
+  
+  // Session configures request-scoped shared state.
+  Session allino.Session
 }
 type JobOption struct {
 	Priority int // optional. Priority of the handler's jobs. Higher values indicate higher priority.
-  CacheExpire time.Duration // optional. Cache expiration duration. Persistent if 0 (default).
   Interval time.Duration // optional. Approximate interval between executions (used in async/dispatch mode).
+  CacheExpire time.Duration // optional. Cache expiration duration. Persistent if 0 (default).
+
+  // Upgrade old input/output data into current version instance.
+	OnInputUpgrade  func(version string, old_input_at time.Time, old_input []byte) (bool, any)
+	OnOutputUpgrade func(version string, old_output_at time.Time, old_output, old_error []byte) (bool, any, error)
+
+  // OnReplayInit returns the stream position to start replaying after. optional.
+  // replayAfter MessageID can be retrieved by r.RequestID()
+	OnReplayInit func() (replayAfter string, err error) 
+  // ReplayTTL automatically removes expired jobs/events from the stream. optional. 
+	ReplayTTL    time.Duration 
 }
+
 type IdempotentRequest interface {
 	IdempotencyKey() string // Override caches/stores key, when input struct of the handler implements this.
 }
 
 type SessionOption struct {
-  // Type defines the session backend implementation.
-  //   "" or "redis": Standard session stored in Redis.
-  //   "sticky"     : In-memory session. The session object is never serialized.
-  //                  Requests are always routed/proxied to the server instance
-  //                  that owns the session.
+	// Type defines the session backend.
+	//   "" or "redis":
+	//       Standard distributed session backed by Redis.
+	//
+	//   "sticky":
+	//       Keeps the session object entirely in memory on a single node.
+	//       The object is never serialized.
+	//
+	//       Requests are automatically routed to the owning node,
+	//       making this suitable for stateful/non-serializable resources
+	//       such as browser automation, AI agents, websocket state,
+	//       or other long-lived in-memory objects.
 	Type string
   // Name identifies the session group.
   // Handlers sharing the same Name will access the same session instance.
   Name string
-  // UseResource specifies the resources consumed when creating a session.
-  UseResource map[string]int // optional, sticky only
+  // UseResource declares scheduler resource consumption for sticky sessions.
+  // When a sticky session is created, the scheduler allocates the specified
+  // resources on the selected node.
+  // Available node resources are configured via `config.session.resources`.
+  UseResource map[string]int
 }
 
 // WithSession retrieves/create a typed session instance associated with the request, then call callback within sync.Mutex lock.
@@ -293,7 +331,14 @@ func (rw *GenericTypedHandler[T, U, E]) Call(r *Request, input T) (output U, err
 func (r *Request) MarkAbort() // aborts the current execution (prevent caching or storing result/error)
 func (r *Request) MarkRequeue() // aborts the execution, and schedules a retry with the same input after a short delay.
 func (r *Request) MarkRequeueAt(waitsec int) // aborts the execution, and schedules a retry with the same input after the specified seconds.
- 
+
+// Global, TTL-trimmed redis stream with in-memory TTL-rotated radix-tree and exact-match map revoke system
+// The in-memory radix tree and map are safely restored during server initialization.
+// A scope can be revoked either by exact string match or by prefix match using a trailing wildcard (e.g. "some:string:*").
+// TTLs for exact and prefix revocations can be configured via server config.
+func (r *Request) Revoke(scope string, reason string) 
+func (r *Request) IsRevoked(scope string, issuedAt time.Time) (revoked bool, reason string) 
+
 // EXAMPLE
 import (
 	"github.com/wh-kuromai/allino"
@@ -304,6 +349,9 @@ type SampleAPIInput struct {
   Version string `query:"ver" default:"v1"`   // Default values (applied before binding; empty input overwrites)
   // Body SampleAPIInputJSONBody `post:"json"` // Automatically binds JSON body to this field. (json.Unmarshal(body, &param.Body))
   // CLIFilePath string `cli:"path"` // CLI variables (yourapp run YourHandler --set path=abc.txt)
+  
+  // Works like query:"instancekey" but input is resource path string, resource data will be retreived from db and json.Unmarshal into it.
+  // Instance SampleClass `class:"instancekey"` 
 }
 type SampleAPIOutput struct {
 	Echo    string    `json:"echo,omitempty"`

@@ -3,9 +3,11 @@ package allino
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/wh-kuromai/allino/internal/ema"
 	"go.uber.org/zap"
 )
 
@@ -19,13 +21,16 @@ type jobManager struct {
 	//handlerOptMap        map[string]*HandlerOption
 	lockedHandlers         *jobset
 	resourcelockedHandlers *jobset
-	dequeueThroughputEMA   *EMACalculator
+	dequeueThroughputEMA   *ema.EMACalculator
 
 	activeJobs int64 // 実行中ジョブ数
 	attempt    int64 // dequeue 失敗回数
 
 	waiting atomic.Bool
 	doneCh  chan struct{} // 完了通知
+
+	inited  sync.Once
+	queueCh chan func()
 }
 
 func newJobManager() *jobManager {
@@ -34,18 +39,42 @@ func newJobManager() *jobManager {
 		//handlerOptMap:        make(map[string]*HandlerOption),
 		lockedHandlers:         newJobset(),
 		resourcelockedHandlers: newJobset(),
-		dequeueThroughputEMA:   NewEMACalculator(0.3),
+		dequeueThroughputEMA:   ema.NewEMACalculator(0.3),
 		doneCh:                 make(chan struct{}),
+		queueCh:                make(chan func()),
 	}
 }
 
+func (jobm *jobManager) Init(sv *Server) {
+	jobm.inited.Do(func() {
+		numgoroutine := sv.Config.JobConfig.Concurrency
+		for i := 0; i < numgoroutine; i++ {
+			go func() {
+				for {
+					select {
+					case <-sv.appctx.Done():
+						return
+					case fn := <-jobm.queueCh:
+						fn()
+					}
+				}
+			}()
+		}
+	})
+}
+
+func (jobm *jobManager) Do(fn func()) {
+	jobm.queueCh <- fn
+}
+
 func (jobm *jobManager) WorkerInit(s callStrategy, sv *Server) {
+	jobm.Init(sv)
 	//idleit := sv.Config.JobConfig.IdleInterval
 	//leasesec := int(mergeSingle(sv.Config.JobConfig.LeaseSeconds, opt.Job.LeaseSeconds).Seconds())
 
 	leaset := sv.Config.JobConfig.LeaseDuration
 
-	jobchan := make(chan JobTask, sv.Config.JobConfig.Concurrency*2)
+	//jobchan := make(chan JobTask, sv.Config.JobConfig.Concurrency*2)
 
 	backoff := NewBackoff(100*time.Millisecond, sv.Config.JobConfig.IdleInterval)
 
@@ -82,19 +111,10 @@ func (jobm *jobManager) WorkerInit(s callStrategy, sv *Server) {
 				}
 
 				atomic.StoreInt64(&jobm.attempt, 0)
-				jobchan <- jtask
-			}
-		}
-	}()
+				//jobchan <- jtask
 
-	numgoroutine := sv.Config.JobConfig.Concurrency
-	for i := 0; i < numgoroutine; i++ {
-		go func() {
-			for {
-				select {
-				case <-sv.appctx.Done():
-					return
-				case jtask := <-jobchan:
+				jobm.Do(func() {
+
 					now := time.Now()
 					opt := sv.handlerOptMap[jtask.Handler()]
 
@@ -128,6 +148,7 @@ func (jobm *jobManager) WorkerInit(s callStrategy, sv *Server) {
 						}()
 
 						r := NewRequest(sv, nil)
+						r.cache.requestid = jtask.Key()
 						r.cache.req_type = REQUEST_JOB
 						r.cache.parentjobid = jtask.Meta().ParentID
 						r.cache.rootjobid = jtask.Meta().RootID
@@ -135,16 +156,16 @@ func (jobm *jobManager) WorkerInit(s callStrategy, sv *Server) {
 						if !r.config.Log.Silent {
 							r.logger.Info("job started", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()))
 						}
-						_, outjson, errjson, syserr := opt.consumer(r, jtask.Handler(), jtask.Input(), false, nil)
+						_, outjson, errjson, syserr := opt.consumer(r, jtask.Handler(), jtask.Meta().Version, jtask.Input(), false, nil)
 						if syserr != nil {
 							if !r.config.Log.Silent {
-								r.logger.Info("job failed", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()), zap.Error(syserr))
+								r.logger.Error("job failed", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()), zap.Error(syserr))
 							}
 
 							err := jtask.Fail(sv.appctx)
 							//err := s.Free(sv.appctx, jtask.Key())
 							if err != nil && !r.config.Log.Silent {
-								r.logger.Info("job system error", zap.String("component", "dequeue/syserr"), zap.Error(err))
+								r.logger.Error("job system error", zap.String("component", "dequeue/syserr"), zap.Error(err))
 							}
 						} else if r.memo.jobabortctrl != "" {
 							// cancel if abort or error
@@ -155,7 +176,7 @@ func (jobm *jobManager) WorkerInit(s callStrategy, sv *Server) {
 							err := jtask.Requeue(sv.appctx, requeueDelay(r))
 							//err := s.Requeue(sv.appctx, jtask.Key(), requeueDelay(r))
 							if err != nil && !r.config.Log.Silent {
-								r.logger.Info("job system error", zap.String("component", "dequeue/requeue"), zap.Error(err))
+								r.logger.Error("job system error", zap.String("component", "dequeue/requeue"), zap.Error(err))
 							}
 						} else if opt.Job.Cache {
 
@@ -175,7 +196,7 @@ func (jobm *jobManager) WorkerInit(s callStrategy, sv *Server) {
 							err := jtask.Success(sv.appctx, jtask.Handler(), jtask.Meta(), jtask.Key(), jtask.Input(), outjson, errjson)
 							//err := s.DoneAsync(sv.appctx, jtask.Key(), ttl, outjson, errjson)
 							if err != nil && !r.config.Log.Silent {
-								r.logger.Info("job system error", zap.String("component", "dequeue/doneasync"), zap.Error(err))
+								r.logger.Error("job system error", zap.String("component", "dequeue/doneasync"), zap.Error(err))
 							}
 						} else {
 							if !r.config.Log.Silent {
@@ -185,7 +206,7 @@ func (jobm *jobManager) WorkerInit(s callStrategy, sv *Server) {
 							err := jtask.Fail(sv.appctx)
 							//err := s.Free(sv.appctx, jtask.Key())
 							if err != nil && !r.config.Log.Silent {
-								r.logger.Info("job system error", zap.String("component", "dequeue/etc"), zap.Error(err))
+								r.logger.Error("job system error", zap.String("component", "dequeue/etc"), zap.Error(err))
 							}
 						}
 						task.Cancel()
@@ -203,10 +224,11 @@ func (jobm *jobManager) WorkerInit(s callStrategy, sv *Server) {
 						jobm.lockedHandlers.Remove(jtask.Handler())
 						opt.lastRun = &now
 					}
-				}
+				})
 			}
-		}()
-	}
+		}
+	}()
+
 }
 
 func (jobm *jobManager) tryFinish() {

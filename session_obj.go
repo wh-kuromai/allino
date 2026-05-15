@@ -89,10 +89,10 @@ func getStickySessionEntry[S any](r *Request) (*stickySessionEntry, error) {
 
 	now := time.Now()
 
-	r.server.Session.dequeueMu.Lock()
-	defer r.server.Session.dequeueMu.Unlock()
+	r.server.session.dequeueMu.Lock()
+	defer r.server.session.dequeueMu.Unlock()
 
-	entry, ok := r.server.Session.sessionStore[sid]
+	entry, ok := r.server.session.sessionStore[sid]
 	if ok {
 		if entry.value != nil {
 			entry.expireAt = now.Add(r.config.Session.Expire)
@@ -223,7 +223,7 @@ func getSessionUpgrader[S any](sessionname string) func(version string, olddata 
 	return nil
 }
 
-func (s *SessionManager) startSessionGC(sv *Server) {
+func (s *sessionManager) startSessionGC(sv *Server) {
 	sv.TimeWheel.Add(time.Minute, func() bool {
 		now := time.Now()
 
@@ -239,7 +239,7 @@ func (s *SessionManager) startSessionGC(sv *Server) {
 	})
 }
 
-func (s *SessionManager) mayDeleteSession(sv *Server, sid string, entry *stickySessionEntry) bool {
+func (s *sessionManager) mayDeleteSession(sv *Server, sid string, entry *stickySessionEntry) bool {
 	if f, ok := entry.value.(SessionKeepAliver); ok {
 		ka := f.ShouldKeepAlive(sv)
 		if ka {

@@ -19,11 +19,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/go-playground/validator/v10"
 	"github.com/goccy/go-yaml"
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/robfig/cron/v3"
+	"github.com/wh-kuromai/allino/internal/timewheel"
 	"github.com/wh-kuromai/cryptino"
 	"go.uber.org/zap"
 
@@ -64,6 +66,8 @@ type Config struct {
 	JobConfig    JobConfig          `json:"job"`
 	HttpClient   HttpClientConfig   `json:"httpclient"`
 	TimeWheel    TimeWheelConfig    `json:"timewheel"`
+	S3           S3Config           `json:"s3"`
+	VFS          VFSConfig          `json:"vfs"`
 
 	Debug            bool              `json:"debug"`
 	DisabledCommands []string          `json:"-"`
@@ -95,12 +99,13 @@ type Server struct {
 	Redis      redis.UniversalClient
 	SQL        *sql.DB
 	Cron       *cron.Cron
+	S3         *s3.Client
 	Validator  *validator.Validate
-	jobManager *jobManager
 	HttpClient *http.Client
-	Session    *SessionManager
 	Env        map[string]string
-	TimeWheel  *TimeWheel
+	TimeWheel  *timewheel.TimeWheel
+	Revoker    *Revoker
+	VFS        VFS
 
 	nodeip     string
 	extensions []extendable
@@ -116,10 +121,12 @@ type Server struct {
 	forcecancel context.CancelFunc
 	//runAsPlugin bool
 
-	handlerOptMap map[string]*HandlerOption
+	handlerOptMap     map[string]*HandlerOption
+	session           *sessionManager
+	jobManager        *jobManager
+	callSQLStrategy   *callSQLStrategy
+	callRedisStrategy *callRedisStrategy
 }
-
-var callSQLstrategy *callSQLStrategy
 
 var yamlDecodeOption = NewYAMLCustomDecodeOption()
 var yamlEncodeOption = NewYAMLCustomEncodeOption()
@@ -128,6 +135,7 @@ var yamlEncodeOption = NewYAMLCustomEncodeOption()
 var settingDefault []byte
 
 func NewServer(config *Config, extconfig ...map[string]any) (*Server, error) {
+
 	s := &Server{
 		Config: &Config{},
 		//Router: httprouter.New(),
@@ -237,7 +245,7 @@ func NewServer(config *Config, extconfig ...map[string]any) (*Server, error) {
 	//}
 	//
 	var logmiddle fiber.Handler
-	s.Logger, logmiddle, err = s.Config.Log.Setup(s.Cron)
+	s.Logger, logmiddle, err = s.Config.Log.Setup(s.Cron, s.Config.Debug)
 	if err != nil {
 		return nil, err
 	}
@@ -264,6 +272,16 @@ func NewServer(config *Config, extconfig ...map[string]any) (*Server, error) {
 	}
 
 	s.HttpClient, err = s.Config.HttpClient.setup()
+	if err != nil {
+		return nil, err
+	}
+
+	s.S3, err = s.Config.S3.setup(appctx)
+	if err != nil {
+		return nil, err
+	}
+
+	s.VFS, err = s.Config.VFS.setup(s)
 	if err != nil {
 		return nil, err
 	}

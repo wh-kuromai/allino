@@ -2,6 +2,7 @@ package allino
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/rs/xid"
@@ -21,6 +22,10 @@ func (s *Server) ServerID() string {
 		fname := "allino.serverid"
 		if s.Config.Session.ServerIDFile != "" {
 			fname = s.Config.Session.ServerIDFile
+		}
+
+		if s.Config.Debug {
+			fname = filepath.Join(os.TempDir(), fname)
 		}
 
 		_, err := os.Stat(fname)

@@ -117,7 +117,7 @@ func (rw *GenericTypedHandler[T, U, E]) go_internal(r *Request, input T, f *Futu
 
 	waitf := func(perr *JobPendingError) {
 		var zeroU U
-		c := rw.options.Job.callstrategy
+		c := r.server.callSQLStrategy
 		_, _, _, syserr := c.Wait(r.Context(), perr.JobID, rw.options.Job.CacheExpire != 0, r.server.TimeWheel)
 		if syserr != nil {
 			f.returns(zeroU, syserr)

@@ -48,6 +48,7 @@ type HandlerOption struct {
 	Internal    bool
 	Summary     string
 	Description string
+	Class       string
 
 	// Reflection Hints
 	InputTypeHint  any
