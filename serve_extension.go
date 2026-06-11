@@ -23,10 +23,21 @@ type ExtOption struct {
 	OnServe         func(s *Server, virtual *Request) error
 	OnShutdown      func(s *Server, virtual *Request) error
 	OnAuthZ         func(r *Request, jwt *cryptino.JSONWebToken) (*cryptino.JSONWebToken, error)
+	OnInjection     func(r *Request, params []*InjectionTarget) error
 	RequestHandler  func(r *Request, opt *HandlerOption, input any) (consumed bool, err error)
 	ResponseHandler func(r *Request, opt *HandlerOption, output any) (consumed bool)
 	ErrorHandler    func(r *Request, opt *HandlerOption, err error) (consumed bool)
 	CLICommands     []*cobra.Command
+
+	//IsCallTarget func(opt *HandlerOption) bool
+	//OnCall       func(r *Request, input any, fromcall bool) (output any, err error)
+}
+
+type InjectionTarget struct {
+	Input     string
+	Extension string
+	Action    string
+	Reference any
 }
 
 type extendable interface {

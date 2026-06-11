@@ -91,6 +91,9 @@ func callRedisInit(s *Server, opt *HandlerOption) error {
 	}
 
 	if rst != nil {
+		if s.Redis == nil {
+			return fmt.Errorf("handler `%s` requires redis, but redis not initialized ", opt.Name)
+		}
 
 		if s.callRedisStrategy == nil {
 			s.callRedisStrategy = &callRedisStrategy{
@@ -123,6 +126,7 @@ func callRedisInit(s *Server, opt *HandlerOption) error {
 				return ErrStreamInputDecodeFailed
 			}
 			r := NewRequest(s, nil)
+			defer r.do_defer()
 			r.cache.requestid = reqid
 			r.cache.req_type = REQUEST_STREAM
 

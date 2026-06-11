@@ -68,14 +68,14 @@ var JobExtension = NewExtension[any, any](
 		OnHandlerInit: func(s *Server, virtual *Request, opt *HandlerOption) (err error) {
 			err = callSQLInit(s, opt)
 			if err != nil && !s.Config.Log.Silent {
-				s.Logger.Error(
+				s.Logger.Fatal(
 					"job OnHandlerInit failed",
 					zap.Error(err),
 				)
 			}
 			err = callRedisInit(s, opt)
 			if err != nil && !s.Config.Log.Silent {
-				s.Logger.Error(
+				s.Logger.Fatal(
 					"redis stream OnHandlerInit failed",
 					zap.Error(err),
 				)
@@ -87,7 +87,7 @@ var JobExtension = NewExtension[any, any](
 		OnServe: func(s *Server, virtual *Request) (err error) {
 			err = callRedisInitEnd(s)
 			if err != nil && !s.Config.Log.Silent {
-				s.Logger.Error(
+				s.Logger.Fatal(
 					"redis stream OnServe failed",
 					zap.Error(err),
 				)

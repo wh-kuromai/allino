@@ -2,6 +2,7 @@ package allino
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"reflect"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/wh-kuromai/jsonino"
 	"go.uber.org/zap"
 )
 
@@ -17,7 +19,15 @@ type TypedHandler interface {
 	Options() *HandlerOption
 	Copy() TypedHandler
 	HandleRequest(r *Request)
-	HandleCall(r *Request, input any) (output any, err error)
+	Handlefunc(r *Request, input any) (output any, err error)
+
+	InputSchema() (*jsonino.Schema, error)
+	OutputSchema() (*jsonino.Schema, error)
+	ErrorSchema() (*jsonino.Schema, error)
+
+	UnmarshalInput(buf []byte) (input any, err error)
+	UnmarshalOutput(buf []byte) (output any, err error)
+	UnmarshalError(buf []byte) (error error, err error)
 }
 
 var typedHandlerList []TypedHandler
@@ -66,14 +76,6 @@ func (s *Server) RegisterAllTypedHandler() {
 		list[i] = &idxhandler{i, h}
 	}
 
-	//slices.SortFunc(list, func(a, b *idxhandler) int {
-	//	r := cmp.Compare(a.h.Options().Priority, b.h.Options().Priority)
-	//	if r == 0 {
-	//		cmp.Compare(a.i, b.i)
-	//	}
-	//	return r
-	//})
-
 	sort.Slice(list, func(i, j int) bool {
 		return comparePaths(list[i].h.Options().Path, list[j].h.Options().Path)
 	})
@@ -117,28 +119,6 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 	if err != nil {
 		panic("set default error: " + err.Error())
 	}
-
-	//var tDefault T
-	//tDefault = NewRefOf[T](func(a any) {
-	//	setDefault(a)
-	//})
-
-	/*
-		var tDefault T
-		tType := reflect.TypeOf(tDefault)
-		if tType != nil {
-			if reflect.ValueOf(tDefault).Kind() == reflect.Ptr {
-				tDefault = reflect.New(tType.Elem()).Interface().(T)
-				setDefault(tDefault)
-				//defaults.Set(tDefault)
-			} else {
-				tDefaultPtr := reflect.New(tType).Interface()
-				setDefault(tDefaultPtr)
-				//defaults.Set(&tDefault)
-				tDefault = reflect.ValueOf(tDefaultPtr).Elem().Interface().(T)
-			}
-		}
-	*/
 
 	var t *T
 	var u *U
@@ -238,7 +218,6 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 					}
 				}
 
-				r.cache.input = param
 				if err == nil && !consumed {
 					resp, err = rw.call_internal(r, param, false)
 				}
@@ -342,6 +321,42 @@ func (rw *GenericTypedHandler[T, U, E]) Options() *HandlerOption {
 	return rw.options
 }
 
+func (rw *GenericTypedHandler[T, U, E]) UnmarshalInput(buf []byte) (input any, err error) {
+	return rw.tpool.AcquireUnmarshalJSON(buf)
+}
+
+func (rw *GenericTypedHandler[T, U, E]) UnmarshalOutput(buf []byte) (output any, err error) {
+	return rw.upool.AcquireUnmarshalJSON(buf)
+}
+
+func (rw *GenericTypedHandler[T, U, E]) UnmarshalError(buf []byte) (outerr error, err error) {
+	return rw.epool.AcquireUnmarshalJSON(buf)
+}
+
+func (rw *GenericTypedHandler[T, U, E]) InputSchema() (*jsonino.Schema, error) {
+	if rw.options.inputType == nil {
+		return nil, errors.New("no inputType")
+	}
+
+	return jsonino.SchemaFrom(rw.options.inputType)
+}
+
+func (rw *GenericTypedHandler[T, U, E]) OutputSchema() (*jsonino.Schema, error) {
+	if rw.options.outputType == nil {
+		return nil, errors.New("no outputType")
+	}
+
+	return jsonino.SchemaFrom(rw.options.outputType)
+}
+
+func (rw *GenericTypedHandler[T, U, E]) ErrorSchema() (*jsonino.Schema, error) {
+	if rw.options.errorType == nil {
+		return nil, errors.New("no errorType")
+	}
+
+	return jsonino.SchemaFrom(rw.options.errorType)
+}
+
 func (rw *GenericTypedHandler[T, U, E]) Copy() TypedHandler {
 	opt := *rw.options
 	return &GenericTypedHandler[T, U, E]{
@@ -354,10 +369,10 @@ func (rw *GenericTypedHandler[T, U, E]) Copy() TypedHandler {
 func (rw *GenericTypedHandler[T, U, E]) Call(r *Request, input T) (output U, err error) {
 	newR := *r // shallow copy (rは構造体)
 	newR.memo = requestMemo{}
-	opt := rw.options
-	if opt != nil {
-		newR.loggerWith = r.Logger().With(zap.String("caller", opt.Path)) // 区別しやすく
-	}
+	//opt := rw.options
+	//if opt != nil && opt.Path != "" {
+	//	newR.loggerWith = r.Logger().With(zap.String("caller", opt.Path)) // 区別しやすく
+	//}
 
 	if !r.config.System.DisableValidator {
 		if err := r.server.Validator.Struct(input); err != nil {
@@ -371,11 +386,12 @@ func (rw *GenericTypedHandler[T, U, E]) Call(r *Request, input T) (output U, err
 }
 
 func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromcall bool) (output U, err error) {
+	//var zeroU U
 	if rw.options.Session.Type != "" {
 		return rw.call_session(r, input, fromcall)
 	}
 
-	if r.server.callRedisStrategy.IsTarget(rw.options) {
+	if r.server.callRedisStrategy != nil && r.server.callRedisStrategy.IsTarget(rw.options) {
 		return rw.call_stream(r, input, fromcall)
 	}
 
@@ -387,6 +403,19 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 
 		return rw.call_job(r, input, fromcall)
 	}
+
+	//for _, exopt := range r.server.extopts {
+	//	if exopt.IsCallTarget != nil && exopt.IsCallTarget(rw.options) && exopt.OnCall != nil {
+	//		outputa, err := exopt.OnCall(r, input, fromcall)
+	//		var ok bool
+	//		output, ok = outputa.(U)
+	//		if ok {
+	//			return output, err
+	//		} else {
+	//			return zeroU, err
+	//		}
+	//	}
+	//}
 
 	return rw.handlefunc(r, input)
 }
@@ -409,10 +438,10 @@ func (rw *GenericTypedHandler[T, U, E]) HandleRequest(r *Request) {
 	rw.handler(r)
 }
 
-func (rw *GenericTypedHandler[T, U, E]) HandleCall(r *Request, input any) (output any, err error) {
+func (rw *GenericTypedHandler[T, U, E]) Handlefunc(r *Request, input any) (output any, err error) {
 	var inT T
 	inT, _ = input.(T)
-	return rw.Call(r, inT)
+	return rw.handlefunc(r, inT)
 }
 
 var contentTypeHandlerMap map[string]*contentTypeHandler

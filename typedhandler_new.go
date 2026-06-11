@@ -131,3 +131,13 @@ func NewTypedUI[T, U any, E error](path string, handler func(*Request, T) (U, E)
 		handler,
 	)
 }
+
+func GetClassHandlers(class string) []TypedHandler {
+	list := make([]TypedHandler, 0, len(typedHandlerList))
+	for _, th := range typedHandlerList {
+		if th.Options().Class == class {
+			list = append(list, th)
+		}
+	}
+	return list
+}

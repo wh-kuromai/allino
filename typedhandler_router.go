@@ -26,8 +26,9 @@ func (r *Server) TypedHandle(th TypedHandler) {
 		} else {
 			eid, err := r.Cron.AddFunc(rcron, func() {
 				rr := NewRequest(r, nil)
+				defer rr.do_defer()
 				rr.cache.req_type = REQUEST_CRON
-				th.HandleCall(rr, nil)
+				th.Handlefunc(rr, nil)
 			})
 			if err == nil {
 				th.Options().cronid = eid

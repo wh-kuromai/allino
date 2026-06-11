@@ -8,6 +8,7 @@
 *.so
 *.dylib
 .DS_Store
+*_draft.*
 tmp
 # Test binary, built with `go test -c`
 *.test

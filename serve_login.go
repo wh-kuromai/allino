@@ -290,7 +290,7 @@ func (r *Request) user() (jwt *cryptino.JSONWebToken, writable bool, err error) 
 	//return "", "", false, nil, ErrNotLoggedIn
 }
 
-func (r *Request) SessionID() string {
+func (r *Request) SessionID(setcookie bool) string {
 	if r.cache.sessionid != "" {
 		return r.cache.sessionid
 	}
@@ -315,8 +315,10 @@ func (r *Request) SessionID() string {
 		r.cache.sessionid = uuid.New().String() // fallback to new session id
 	}
 
-	ngcookie := IssueGuestCookie(r)
-	r.fiber.Cookie(ngcookie)
+	if setcookie {
+		ngcookie := IssueGuestCookie(r)
+		r.fiber.Cookie(ngcookie)
+	}
 
 	return r.cache.sessionid
 }
@@ -395,7 +397,7 @@ func IssueLoginCookie(r *Request, uid, name string, custom ...map[string]any) *f
 }
 
 func IssueGuestCookie(r *Request) *fiber.Cookie {
-	sid := r.SessionID()
+	sid := r.SessionID(false)
 	jwt := cryptino.GetJWTBasic(sid, r.config.Login.GuestCookie.Expire)
 	jwt.Body.Audience = r.config.Login.GuestCookie.JWTAudience
 

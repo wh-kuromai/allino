@@ -221,6 +221,7 @@ func NewStatusError(status int) error
 // NewRedirectError makes error performing redirect. Since allino requires typed responses via generics, redirects are treated as error values.
 func NewRedirectError(status int, location string) error
 // IssueCSRFToken issues a short-lived token used to protect write operations from CSRF attacks.
+// by default, this token should be added to `csrf_token` query or form parameter.
 func IssueCSRFToken(r *Request, uid string) string
 // IssueAccessToken issues a short-lived token used to API access.
 // Optional custom JWT claims can be provided; they can later be retrieved via struct fields tagged with `jwt:"key"`.
@@ -339,6 +340,8 @@ func (r *Request) MarkRequeueAt(waitsec int) // aborts the execution, and schedu
 func (r *Request) Revoke(scope string, reason string) 
 func (r *Request) IsRevoked(scope string, issuedAt time.Time) (revoked bool, reason string) 
 
+func GetClassHandlers(class string) []TypedHandler
+
 // EXAMPLE
 import (
 	"github.com/wh-kuromai/allino"
@@ -350,8 +353,13 @@ type SampleAPIInput struct {
   // Body SampleAPIInputJSONBody `post:"json"` // Automatically binds JSON body to this field. (json.Unmarshal(body, &param.Body))
   // CLIFilePath string `cli:"path"` // CLI variables (yourapp run YourHandler --set path=abc.txt)
   
-  // Works like query:"instancekey" but input is resource path string, resource data will be retreived from db and json.Unmarshal into it.
-  // Instance SampleClass `class:"instancekey"` 
+  // `inject` tag will make this handler works like class method.
+  //  extensions are responsible for 
+  //    caller send instanceid as query/form/path input string
+  //    -> send to extension 
+  //    -> extension retreive data, check ACL, then return data.
+  //    -> unmarshal into this param.
+  // Instance SampleClass `query:"instanceid" inject:"extensionName:action"` 
 }
 type SampleAPIOutput struct {
 	Echo    string    `json:"echo,omitempty"`

@@ -23,6 +23,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/goccy/go-yaml"
 	"github.com/gofiber/fiber/v2"
+	"github.com/openai/openai-go"
 	"github.com/redis/go-redis/v9"
 	"github.com/robfig/cron/v3"
 	"github.com/wh-kuromai/allino/internal/timewheel"
@@ -66,8 +67,9 @@ type Config struct {
 	JobConfig    JobConfig          `json:"job"`
 	HttpClient   HttpClientConfig   `json:"httpclient"`
 	TimeWheel    TimeWheelConfig    `json:"timewheel"`
+	Sqids        SqidsConfig        `json:"sqids"`
 	S3           S3Config           `json:"s3"`
-	VFS          VFSConfig          `json:"vfs"`
+	AI           AIConfig           `json:"ai"`
 
 	Debug            bool              `json:"debug"`
 	DisabledCommands []string          `json:"-"`
@@ -103,9 +105,9 @@ type Server struct {
 	Validator  *validator.Validate
 	HttpClient *http.Client
 	Env        map[string]string
+	Sqids      *Sqids
 	TimeWheel  *timewheel.TimeWheel
-	Revoker    *Revoker
-	VFS        VFS
+	ChatGPT    *openai.Client
 
 	nodeip     string
 	extensions []extendable
@@ -276,12 +278,12 @@ func NewServer(config *Config, extconfig ...map[string]any) (*Server, error) {
 		return nil, err
 	}
 
-	s.S3, err = s.Config.S3.setup(appctx)
+	s.Sqids, err = s.Config.Sqids.setup()
 	if err != nil {
 		return nil, err
 	}
 
-	s.VFS, err = s.Config.VFS.setup(s)
+	s.S3, err = s.Config.S3.setup(appctx)
 	if err != nil {
 		return nil, err
 	}
@@ -537,34 +539,46 @@ WARNING: debug=true
 		)
 	}
 
-	for _, ext := range s.extopts {
-		s.Logger.Info("extension init", zap.String("name", ext.Name))
-		if ext.OnHandlerInit != nil {
-			opts := s.RegisteredTypedHandlers()
-			for _, opt := range opts {
-				err = ext.OnHandlerInit(s, NewRequest(s, nil), opt)
-				if err != nil {
-					s.errorPrintln(fmt.Sprintf("OnHandlerInit error for Extension `%s` to path `%s`: ", ext.Name, opt.Path), err)
+	s.serveInitOnly()
+
+	/*
+		for _, ext := range s.extopts {
+			s.Logger.Info("extension init", zap.String("name", ext.Name))
+			if ext.OnHandlerInit != nil {
+				opts := s.RegisteredTypedHandlers()
+				for _, opt := range opts {
+					err = ext.OnHandlerInit(s, NewRequest(s, nil), opt)
+					if err != nil {
+						s.errorPrintln(fmt.Sprintf("OnHandlerInit error for Extension `%s` to path `%s`: ", ext.Name, opt.Path), err)
+					}
+				}
+
+				for _, h := range s.internalHandlerCache {
+					opt := h.Options()
+					err := ext.OnHandlerInit(s, NewRequest(s, nil), opt)
+					if err != nil {
+						s.errorPrintln(fmt.Sprintf("OnHandlerInit error for Extension `%s` to path `%s`: ", ext.Name, opt.Path), err)
+					}
 				}
 			}
 		}
-	}
 
-	if s.Config.OnServe != nil {
-		err := s.Config.OnServe(s)
-		if err != nil {
-			s.errorPrintln("OnServe error: ", err)
-		}
-	}
-
-	for _, ext := range s.extopts {
-		if ext.OnServe != nil {
-			err = ext.OnServe(s, NewRequest(s, nil))
+		if s.Config.OnServe != nil {
+			err := s.Config.OnServe(s)
 			if err != nil {
-				s.errorPrintln(fmt.Sprintf("OnServe error for Extension `%s`: ", ext.Name), err)
+				s.errorPrintln("OnServe error: ", err)
 			}
 		}
-	}
+
+		for _, ext := range s.extopts {
+			if ext.OnServe != nil {
+				err = ext.OnServe(s, NewRequest(s, nil))
+				if err != nil {
+					s.errorPrintln(fmt.Sprintf("OnServe error for Extension `%s`: ", ext.Name), err)
+				}
+			}
+		}
+	*/
 
 	// Serve
 	quit := make(chan os.Signal, 1)
@@ -655,6 +669,18 @@ WARNING: debug=true
 }
 
 func (s *Server) serveInitOnly() {
+	if !s.Config.Log.Silent {
+		opts := s.RegisteredTypedHandlers()
+		for _, opt := range opts {
+			s.Logger.Info("handler init", zap.String("path", opt.Path))
+		}
+
+		for _, h := range s.internalHandlerCache {
+			opt := h.Options()
+			s.Logger.Info("handler init", zap.String("name", opt.Name))
+		}
+	}
+
 	for _, ext := range s.extopts {
 		s.Logger.Info("extension init", zap.String("name", ext.Name))
 		if ext.OnHandlerInit != nil {

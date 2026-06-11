@@ -209,3 +209,46 @@ func (s *sessionManager) entry_free(sv *Server, entry *stickySessionEntry) int {
 
 	return CONSUME_OK
 }
+
+func (s *sessionManager) startSessionGC(sv *Server) {
+	sv.TimeWheel.Add(time.Minute, func() bool {
+		now := time.Now()
+
+		s.dequeueMu.Lock()
+		defer s.dequeueMu.Unlock()
+
+		for k, entry := range s.sessionStore {
+			if now.After(entry.expireAt) {
+				s.mayDeleteSession(sv, k, entry)
+			}
+		}
+		return true
+	})
+}
+
+func (s *sessionManager) mayDeleteSession(sv *Server, sid string, entry *stickySessionEntry) bool {
+	if f, ok := entry.value.(SessionKeepAliver); ok {
+		ka := f.ShouldKeepAlive(sv)
+		if ka {
+			entry.expireAt = time.Now().Add(sv.Config.Session.Expire)
+			return false
+		}
+	}
+
+	if f, ok := entry.value.(SessionFinalizer); ok {
+		err := f.Close(sv)
+		if err != nil && !sv.Config.Log.Silent {
+			sv.Logger.Error("session close failed", zap.Error(err))
+		}
+	}
+
+	delete(s.sessionStore, sid)
+
+	conresult := s.entry_free(sv, entry)
+	if conresult == CONSUME_OK {
+		handler := encodeHandlerName(s.createSessionMap[entry.name].options)
+		sv.jobManager.resourcelockedHandlers.Remove(handler)
+	}
+
+	return true
+}

@@ -1,22 +1,25 @@
-package allino
+package revoker
 
 import (
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/wh-kuromai/allino"
 	"github.com/wh-kuromai/allino/internal/trie"
 	"github.com/wh-kuromai/cryptino"
 )
 
-var RevokerExtension = NewExtension[any, any](
+var revoker *Revoker
+
+var RevokerExtension = allino.NewExtension[any, any](
 	"revoker",
-	&ExtOption{
-		OnAuthZ: func(r *Request, jwt *cryptino.JSONWebToken) (*cryptino.JSONWebToken, error) {
-			if r.config.Login.Revoke.UseLoginRevoke {
-				revoked, reason := r.server.Revoker.IsRevoked(jwt.Body.Subject, time.Unix(jwt.Body.IssuedAt, 0))
+	&allino.ExtOption{
+		OnAuthZ: func(r *allino.Request, jwt *cryptino.JSONWebToken) (*cryptino.JSONWebToken, error) {
+			if r.Config().Login.Revoke.UseLoginRevoke {
+				revoked, reason := revoker.IsRevoked(jwt.Body.Subject, time.Unix(jwt.Body.IssuedAt, 0))
 				if revoked {
-					return nil, NewError(reason)
+					return nil, allino.NewError(reason)
 				}
 			}
 
@@ -24,10 +27,6 @@ var RevokerExtension = NewExtension[any, any](
 		},
 	},
 )
-
-type RevokeConfig struct {
-	UseLoginRevoke bool `json:"use_login_revoke"`
-}
 
 type RevokeInput struct {
 	Scope  string    `json:"scope"`
@@ -38,26 +37,26 @@ type RevokeInput struct {
 type RevokeOutput struct {
 }
 
-var RevokeHandler = NewTypedHandler(
-	HandlerOption{
+var RevokeHandler = allino.NewTypedHandler(
+	allino.HandlerOption{
 		Name:    "revoker",
 		Version: "1.0.0",
 		JobMode: "fanout",
 	},
-	func(r *Request, param *RevokeInput) (*RevokeOutput, error) {
-		r.server.Revoker.Insert(param.Scope, param.Time, param.Reason)
+	func(r *allino.Request, param *RevokeInput) (*RevokeOutput, error) {
+		revoker.Insert(param.Scope, param.Time, param.Reason)
 		return nil, nil
 	},
 )
 
-var RevokePrefixHandler = NewTypedHandler(
-	HandlerOption{
+var RevokePrefixHandler = allino.NewTypedHandler(
+	allino.HandlerOption{
 		Name:    "revoker-prefix",
 		Version: "1.0.0",
 		JobMode: "fanout",
 	},
-	func(r *Request, param *RevokeInput) (*RevokeOutput, error) {
-		r.server.Revoker.InsertPrefix(param.Scope, param.Time, param.Reason)
+	func(r *allino.Request, param *RevokeInput) (*RevokeOutput, error) {
+		revoker.InsertPrefix(param.Scope, param.Time, param.Reason)
 		return nil, nil
 	},
 )
@@ -137,7 +136,7 @@ func (r *Revoker) current() *revokeBucket {
 	return &(*buckets)[0]
 }
 
-func (r *Revoker) Revoke(req *Request, scope string, t time.Time, reason string) {
+func (r *Revoker) Revoke(req *allino.Request, scope string, t time.Time, reason string) {
 	idx := strings.Index(scope, "*")
 	if idx < 0 {
 		RevokeHandler.Call(req, &RevokeInput{
@@ -206,10 +205,10 @@ func (r *Revoker) isRevokedPrefix(scope string, issuedAt time.Time) (revoked boo
 	return
 }
 
-func (r *Request) Revoke(scope string, reason string) {
-	r.server.Revoker.Revoke(r, scope, time.Now(), reason)
+func Revoke(r *allino.Request, scope string, reason string) {
+	revoker.Revoke(r, scope, time.Now(), reason)
 }
 
-func (r *Request) IsRevoked(scope string, issuedAt time.Time) (revoked bool, reason string) {
-	return r.server.Revoker.IsRevoked(scope, issuedAt)
+func IsRevoked(r *allino.Request, scope string, issuedAt time.Time) (revoked bool, reason string) {
+	return revoker.IsRevoked(scope, issuedAt)
 }

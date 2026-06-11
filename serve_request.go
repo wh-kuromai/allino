@@ -18,6 +18,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gofiber/fiber/v2"
+	"github.com/openai/openai-go"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/xid"
 	"go.uber.org/zap"
@@ -73,11 +74,12 @@ type requestCache struct {
 
 	//taskwheel        *twWheel
 	//validator        *validator.Validate
-	input          any
+	//input          any
 	sessiontype    string
 	sessionid      string
 	sessionname    string
 	sessionversion string
+	sessionredis   *redisSession
 	//guestcookiefound  bool
 	//ctx              context.Context
 
@@ -144,8 +146,22 @@ func (r *Request) S3() *s3.Client {
 	return r.server.S3
 }
 
+func (r *Request) ChatGPT() *openai.Client {
+	return r.server.ChatGPT
+}
+
+func (r *Request) AI(model ...string) AI {
+	return r.config.AI.Select(model...)
+}
+
 func (r *Request) HttpClient() *http.Client {
 	return r.server.HttpClient
+}
+
+func (r *Request) do_defer() {
+	for _, fn := range r.cache.deferfn {
+		fn()
+	}
 }
 
 func (r *Request) Logger() *zap.Logger {
@@ -453,6 +469,8 @@ func (r *Request) getAll(params interface{}, rp *reflectPlan) error {
 	}
 	pt := pv.Type()
 
+	injectTarget := make([]*InjectionTarget, 0, 10)
+
 	for i := 0; i < pt.NumField(); i++ {
 		ptf := pt.Field(i)
 		// 非公開フィールドはスキップ（タグ付けされていても set できないため）
@@ -541,6 +559,35 @@ func (r *Request) getAll(params interface{}, rp *reflectPlan) error {
 			}
 		}
 
+		//--- inject="extensionName:action"
+		if rpf.tagoks[tagResource] {
+			target := ptv.Addr().Interface()
+			if ptv.Kind() == reflect.Ptr {
+				if ptv.IsNil() {
+					ptv.Set(reflect.New(ptv.Type().Elem()))
+				}
+				target = ptv.Interface()
+			}
+
+			extName := rpf.tags[tagResource]
+			action := ""
+			extNameIdx := strings.Index(extName, ":")
+			if extNameIdx > 0 {
+				action = extName[extNameIdx+1:]
+				extName = extName[:extNameIdx]
+			}
+
+			injectTarget = append(injectTarget, &InjectionTarget{
+				Input:     pfval,
+				Extension: extName,
+				Action:    action,
+				Reference: target,
+			})
+
+			continue
+		}
+		//---
+
 		setByReflect(pfval, rpf.ispointer, rpf.basetyp, ptv)
 	}
 
@@ -549,6 +596,30 @@ func (r *Request) getAll(params interface{}, rp *reflectPlan) error {
 			return ErrValidationFailed
 		}
 	}
+
+	// Injection Extension
+	if len(injectTarget) > 0 {
+		for _, opt := range r.server.extopts {
+			if opt.OnInjection == nil {
+				continue
+			}
+
+			extInjectTarget := make([]*InjectionTarget, 0, len(injectTarget))
+			for _, v := range injectTarget {
+				if v.Extension == opt.Name {
+					extInjectTarget = append(extInjectTarget, v)
+				}
+			}
+
+			if len(extInjectTarget) > 0 {
+				err := opt.OnInjection(r, extInjectTarget)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

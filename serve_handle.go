@@ -31,6 +31,7 @@ const (
 func (s *Server) HandleRequestFunc(method, pattern string, handlerfunc func(*Request)) {
 	s.Fiber.Add(method, pattern, func(w *fiber.Ctx) error {
 		req := NewRequest(s, w)
+		defer req.do_defer()
 		req.cache.req_type = REQUEST_HTTP
 		handlerfunc(req)
 		return nil

@@ -23,6 +23,11 @@ var s = allino.NewTestServer(&allino.Config{
 		Driver: "sqlite",
 		//DSN:    "./tmp/test_sqlite" + xid.New().String() + ".db", //"postgresql://testuser@localhost:5432/testdb?sslmode=disable",
 	},
+	AI: allino.AIConfig{
+		ChatGPT: allino.ChatGPTConfig{
+			ResponseAPIURL: "http://localhost:8000/api/debug/dump",
+		},
+	},
 })
 
 func TestEchoAPI(t *testing.T) {

@@ -148,6 +148,7 @@ func (jobm *jobManager) WorkerInit(s callStrategy, sv *Server) {
 						}()
 
 						r := NewRequest(sv, nil)
+						defer r.do_defer()
 						r.cache.requestid = jtask.Key()
 						r.cache.req_type = REQUEST_JOB
 						r.cache.parentjobid = jtask.Meta().ParentID

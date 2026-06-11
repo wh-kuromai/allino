@@ -89,6 +89,7 @@ func NewCLI(config *Config, extconfig ...map[string]any) *CLI {
 				}
 
 				r := NewRequest(s, nil)
+				defer r.do_defer()
 				if injson == "" {
 					injson = "{}"
 				}

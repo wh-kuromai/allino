@@ -62,3 +62,8 @@ job:
   redis_key_prefix: "allino:key:"
   redis_stream_group_prefix: "allino:group:"
   redis_stream_consumer_prefix: "allino:consumer:"
+ai:
+  tool_max_body_size: 1000
+  tool_max_loop: 2
+  chatgpt:
+    response_api_url: "https://api.openai.com/v1/responses"
