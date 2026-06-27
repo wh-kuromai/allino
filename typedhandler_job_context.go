@@ -6,8 +6,8 @@ import (
 )
 
 type jobExecutionContext struct {
-	r        *Request
-	opt      *HandlerOption
+	r        *Runtime
+	opt      *Option
 	input    any
 	fromcall bool
 

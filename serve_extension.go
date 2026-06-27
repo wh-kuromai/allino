@@ -18,19 +18,19 @@ type ExtOption struct {
 	ExtInfo
 
 	SQLSchema       func(driver string) string
-	OnInit          func(s *Server, virtual *Request) error
-	OnHandlerInit   func(s *Server, virtual *Request, opt *HandlerOption) error
-	OnServe         func(s *Server, virtual *Request) error
-	OnShutdown      func(s *Server, virtual *Request) error
-	OnAuthZ         func(r *Request, jwt *cryptino.JSONWebToken) (*cryptino.JSONWebToken, error)
-	OnInjection     func(r *Request, params []*InjectionTarget) error
-	RequestHandler  func(r *Request, opt *HandlerOption, input any) (consumed bool, err error)
-	ResponseHandler func(r *Request, opt *HandlerOption, output any) (consumed bool)
-	ErrorHandler    func(r *Request, opt *HandlerOption, err error) (consumed bool)
+	OnInit          func(s *Server, virtual *Runtime) error
+	OnHandlerInit   func(s *Server, virtual *Runtime, opt *Option) error
+	OnServe         func(s *Server, virtual *Runtime) error
+	OnShutdown      func(s *Server, virtual *Runtime) error
+	OnAuthZ         func(r *Runtime, jwt *cryptino.JSONWebToken) (*cryptino.JSONWebToken, error)
+	OnInjection     func(r *Runtime, params []*InjectionTarget) error
+	RequestHandler  func(r *Runtime, opt *Option, input any) (consumed bool, err error)
+	ResponseHandler func(r *Runtime, opt *Option, output any) (consumed bool)
+	ErrorHandler    func(r *Runtime, opt *Option, err error) (consumed bool)
 	CLICommands     []*cobra.Command
 
-	//IsCallTarget func(opt *HandlerOption) bool
-	//OnCall       func(r *Request, input any, fromcall bool) (output any, err error)
+	//IsCallTarget func(opt *Option) bool
+	//OnCall       func(r *Runtime, input any, fromcall bool) (output any, err error)
 }
 
 type InjectionTarget struct {
@@ -54,7 +54,7 @@ type Extension[E, F any] struct {
 	fIsAny bool
 }
 
-func (c *Extension[E, F]) HandlerOptionExt(opt *HandlerOption) (F, bool) {
+func (c *Extension[E, F]) OptionExt(opt *Option) (F, bool) {
 	var zeroF F
 	if opt == nil {
 		return zeroF, false

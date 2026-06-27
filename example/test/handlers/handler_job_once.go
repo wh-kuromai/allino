@@ -16,8 +16,8 @@ type OnceOutput struct {
 	Result string `json:"result"`
 }
 
-var OnceHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var OnceHandler = allino.NewFunction(
+	allino.Option{
 		Path:        "/api/oncetest",
 		Method:      "GET",
 		ContentType: allino.JSON,
@@ -25,7 +25,7 @@ var OnceHandler = allino.NewTypedHandler(
 		Version:     "1.0.0",
 		JobMode:     "once",
 	},
-	func(r *allino.Request, param OnceInput) (*OnceOutput, error) {
+	func(r *allino.Runtime, param OnceInput) (*OnceOutput, error) {
 
 		atomic.AddInt32(&OnceExecutionCount, 1)
 

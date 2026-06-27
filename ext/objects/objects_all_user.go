@@ -8,7 +8,7 @@ import (
 	"github.com/wh-kuromai/allino/ext/revoker"
 )
 
-func (a *AllObjects) getUserMetaCache(r *allino.Request, uid string) (*UserMetadataSet, error) {
+func (a *AllObjects) getUserMetaCache(r *allino.Runtime, uid string) (*UserMetadataSet, error) {
 	usermetacache, ok, err := allino.GetRedisSessionEntry[UserMetadataSet](r, uid, "allino.objects")
 	if err == nil && ok {
 		revoked, _ := revoker.IsRevoked(r, usermetacache.NodePath, time.Unix(usermetacache.IssuedAt, 0))

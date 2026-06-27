@@ -16,7 +16,7 @@ type routeKey struct {
 }
 
 func printRoute(s *Server) {
-	allh := s.RegisteredTypedHandlers()
+	allh := s.RegisteredFunctions()
 
 	fmt.Print(strings.TrimSpace(`
 Note:
@@ -35,7 +35,7 @@ Note:
 	}
 
 	// 👇 2. グルーピング（前のやつ）
-	grouped := map[string][]*HandlerOption{}
+	grouped := map[string][]*Option{}
 	for _, r := range allh {
 		grouped[r.Package] = append(grouped[r.Package], r)
 	}

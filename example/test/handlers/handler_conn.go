@@ -12,7 +12,7 @@ type PingOutput struct {
 }
 
 var PingHandler = allino.NewTypedAPI("/test/ping",
-	func(r *allino.Request, _ any) (*PingOutput, error) {
+	func(r *allino.Runtime, _ any) (*PingOutput, error) {
 		errRedis := r.Redis().Ping(r.Context()).Err()
 		errSQL := r.SQL().PingContext(r.Context())
 		return &PingOutput{

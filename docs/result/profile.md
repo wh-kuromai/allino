@@ -37,7 +37,7 @@ type UserProfile struct {
 ```go
 var GetUserProfileAPI = allino.NewTypedAPI[struct{}, *UserProfile, error](
 	"/api/user/profile",
-	func(r *allino.Request, _ struct{}) (*UserProfile, error) {
+	func(r *allino.Runtime, _ struct{}) (*UserProfile, error) {
 		uid, _, writable, err := r.User()
 		if err != nil || !writable {
 			return nil, allino.CodeError{StatusCode: 401, Code: "unauthorized", Msg: "User not authorized"}
@@ -71,7 +71,7 @@ type UpdateProfileInput struct {
 
 var EditUserProfileAPI = allino.NewTypedAPI[*UpdateProfileInput, struct{}, error](
 	"/api/user/profile",
-	func(r *allino.Request, input *UpdateProfileInput) (struct{}, error) {
+	func(r *allino.Runtime, input *UpdateProfileInput) (struct{}, error) {
 		uid, _, writable, err := r.User()
 		if err != nil || !writable {
 			return struct{}{}, allino.CodeError{StatusCode: 401, Code: "unauthorized", Msg: "User not authorized"}
@@ -102,6 +102,6 @@ var EditUserProfileAPI = allino.NewTypedAPI[*UpdateProfileInput, struct{}, error
 * `User()` authenticates the user and checks CSRF/auth headers.
 * All fields are validated via [go-playground/validator](https://pkg.go.dev/github.com/go-playground/validator).
 * Responses follow allino conventions: `{"data":{...}}` or `{"error":{...}}`.
-* You may extend this to accept JSON input by changing `form:"..."` to `post:"json"` and adjusting content-type in `HandlerOption`.
+* You may extend this to accept JSON input by changing `form:"..."` to `post:"json"` and adjusting content-type in `Option`.
 
 Would you like the same APIs with HTML templates too (using `NewTypedUI`)?

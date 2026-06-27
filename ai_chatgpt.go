@@ -18,7 +18,7 @@ type ChatGPT struct {
 }
 
 func init() {
-	_ = RegisterAI("chatgpt", func(config *AIConfig, model string) AI {
+	_ = RegisterAIProvider("chatgpt", func(config *AIConfig, model string) AI {
 		return &ChatGPT{
 			apiKey: config.ChatGPT.APIKey,
 			model:  model,
@@ -28,10 +28,10 @@ func init() {
 }
 
 func (c *ChatGPT) Inference(
-	r *Request,
+	r *Runtime,
 	messages []map[string]any,
-	caller TypedHandler,
-	tools []TypedHandler,
+	caller Function,
+	tools []Function,
 ) (string, error) {
 	logger := r.Logger()
 	logger.Debug("chatgpt inference start",
@@ -142,10 +142,10 @@ func (c *ChatGPT) Inference(
 }
 
 func (c *ChatGPT) responsesCreate(
-	r *Request,
+	r *Runtime,
 	previousResponseID string,
 	input any,
-	tools []TypedHandler,
+	tools []Function,
 ) (*ChatGPTResponsesResponse, error) {
 
 	var toolDefs []map[string]any

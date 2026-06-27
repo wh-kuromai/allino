@@ -15,15 +15,15 @@ type AuthCSRFOutput struct {
 	Echo string `json:"echo"`
 }
 
-var AuthCSRFTypedHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var AuthCSRFFunction = allino.NewFunction(
+	allino.Option{
 		Path:        "/test/authcsrf",
 		Method:      "POST",
 		ContentType: "application/json",
 		CORS:        true, // CSRF対策の動作確認に必要
 		Summary:     "Requires authentication and CSRF token",
 	},
-	func(r *allino.Request, param *AuthCSRFInput) (*AuthCSRFOutput, error) {
+	func(r *allino.Runtime, param *AuthCSRFInput) (*AuthCSRFOutput, error) {
 		uid, _, writable, err := r.User()
 		if err != nil || !writable {
 			return nil, allino.NewCodeError(401, "UNAUTHORIZED", "login required")
@@ -34,13 +34,13 @@ var AuthCSRFTypedHandler = allino.NewTypedHandler(
 		}, nil
 	})
 
-var CORSHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var CORSHandler = allino.NewFunction(
+	allino.Option{
 		Path:        "/test/cors",
 		Method:      "POST",
 		CORS:        true,
 		ContentType: "application/json",
 	},
-	func(r *allino.Request, _ any) (any, error) {
+	func(r *allino.Runtime, _ any) (any, error) {
 		return map[string]string{"ok": "yes"}, nil
 	})

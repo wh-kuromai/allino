@@ -7,7 +7,7 @@ import (
 	"github.com/wh-kuromai/allino"
 )
 
-func NewTestRequest(s *allino.Server) *allino.Request {
+func NewTestRequest(s *allino.Server) *allino.Runtime {
 	req := allino.NewRequest(s, nil)
 	return req
 }

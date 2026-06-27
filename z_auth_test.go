@@ -19,7 +19,7 @@ func TestAuthCSRF_Success(t *testing.T) {
 	req := httptest.NewRequest("POST", "/test/authcsrf", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	//h := handlers.AuthCSRFTypedHandler
+	//h := handlers.AuthCSRFFunction
 
 	// --- ユーザーID をセットしつつ、ログインクッキー＆CSRFトークンも付与 ---
 	user := "testuser"
@@ -62,7 +62,7 @@ func TestAuthCSRF_Unauthorized_NoCSRF(t *testing.T) {
 	req := httptest.NewRequest("POST", "/test/authcsrf", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	//h := handlers.AuthCSRFTypedHandler
+	//h := handlers.AuthCSRFFunction
 
 	// login cookie はあるが、CSRF token はない
 	user := "testuser"

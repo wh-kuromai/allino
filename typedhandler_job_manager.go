@@ -18,7 +18,7 @@ type jobProgress struct {
 
 type jobManager struct {
 	handlers *jobset
-	//handlerOptMap        map[string]*HandlerOption
+	//handlerOptMap        map[string]*Option
 	lockedHandlers         *jobset
 	resourcelockedHandlers *jobset
 	dequeueThroughputEMA   *ema.EMACalculator
@@ -36,7 +36,7 @@ type jobManager struct {
 func newJobManager() *jobManager {
 	return &jobManager{
 		handlers: newJobset(),
-		//handlerOptMap:        make(map[string]*HandlerOption),
+		//handlerOptMap:        make(map[string]*Option),
 		lockedHandlers:         newJobset(),
 		resourcelockedHandlers: newJobset(),
 		dequeueThroughputEMA:   ema.NewEMACalculator(0.3),

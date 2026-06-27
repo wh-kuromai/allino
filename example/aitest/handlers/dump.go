@@ -15,7 +15,7 @@ type DumpAPIOutput struct {
 
 var DumpAPI = allino.NewTypedAPI(
 	"/api/debug/dump",
-	func(r *allino.Request, _ any) (*DumpAPIOutput, error) {
+	func(r *allino.Runtime, _ any) (*DumpAPIOutput, error) {
 
 		ctx := r.Fiber()
 

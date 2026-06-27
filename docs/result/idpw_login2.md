@@ -34,7 +34,7 @@ type RegisterOutput struct {
 
 var RegisterHandler = allino.NewTypedAPI(
 	"/api/register",
-	func(r *allino.Request, in *RegisterInput) (*RegisterOutput, error) {
+	func(r *allino.Runtime, in *RegisterInput) (*RegisterOutput, error) {
 		var exists int
 		err := r.SQL.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", in.ID).Scan(&exists)
 		if err != nil {
@@ -77,7 +77,7 @@ type LoginOutput struct {
 
 var LoginHandler = allino.NewTypedAPI(
 	"/api/login",
-	func(r *allino.Request, in *LoginInput) (*LoginOutput, error) {
+	func(r *allino.Runtime, in *LoginInput) (*LoginOutput, error) {
 		var storedPW string
 		err := r.SQL.QueryRow("SELECT pw FROM users WHERE id = ?", in.ID).Scan(&storedPW)
 		if err != nil {

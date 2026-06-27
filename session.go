@@ -2,9 +2,9 @@ package allino
 
 import "errors"
 
-//var CreateSessionMap map[string]*GenericTypedHandler[*CreateSessionInput, *CreateSessionOutput, error]
+//var CreateSessionMap map[string]*GenericFunction[*CreateSessionInput, *CreateSessionOutput, error]
 
-func (rw *GenericTypedHandler[T, U, E]) call_session(r *Request, input T, fromcall bool) (output U, err error) {
+func (rw *GenericFunction[T, U, E]) call_session(r *Runtime, input T, fromcall bool) (output U, err error) {
 	r.cache.sessionname = rw.options.Session.Name
 	r.cache.sessionversion = rw.options.Session.Version
 
@@ -23,7 +23,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_session(r *Request, input T, fromca
 // Called handler's session memory. (not marshaled at any time.)
 // *S should be thread-safe.
 // SessionInitializer, SessionTimeoutConfirm, SessionFinalizer will be called if S implement it.
-func GetSession[S any](r *Request) (*S, error) {
+func GetSession[S any](r *Runtime) (*S, error) {
 	if r.cache.sessiontype == "sticky" {
 		entry, err := getStickySessionEntry[S](r)
 		if err != nil {
@@ -46,7 +46,7 @@ func GetSession[S any](r *Request) (*S, error) {
 }
 
 // WithSession aquires mutex.Lock to this session, during mutexFn execution.
-func WithSession[S any](r *Request, fn func(*S) error) error {
+func WithSession[S any](r *Runtime, fn func(*S) error) error {
 	if r.cache.sessiontype == "sticky" {
 		entry, err := getStickySessionEntry[S](r)
 		if err != nil {
@@ -72,7 +72,7 @@ func WithSession[S any](r *Request, fn func(*S) error) error {
 	return fn(s)
 }
 
-func getRedisSessionEntryMulti[S any](r *Request) (*S, error) {
+func getRedisSessionEntryMulti[S any](r *Runtime) (*S, error) {
 	uid, _, _, err := r.User()
 	if errors.Is(ErrNotLoggedIn, err) {
 		s, created, err := GetRedisSessionEntry[S](r, r.config.Session.RedisPrefix+":uid:"+uid, r.cache.sessionname)

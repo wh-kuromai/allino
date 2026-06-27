@@ -23,17 +23,16 @@ type TTLOutput struct {
 	Result string
 }
 
-var TTLWorkerHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
-		Name:     "ttl-worker",
-		Version:  "1.0.0",
-		JobMode:  "dispatch",
-		Internal: true,
+var TTLWorkerHandler = allino.NewFunction(
+	allino.Option{
+		Name:    "ttl-worker",
+		Version: "1.0.0",
+		JobMode: "dispatch",
 		Job: allino.JobOption{
 			CacheExpire: 2 * time.Second,
 		},
 	},
-	func(r *allino.Request, param TTLInput) (*TTLOutput, error) {
+	func(r *allino.Runtime, param TTLInput) (*TTLOutput, error) {
 
 		atomic.AddInt32(&TTLExecutionCount, 1)
 
@@ -58,13 +57,13 @@ type TTLTriggerOutput struct {
 	Status string `json:"status"`
 }
 
-var TTLTriggerHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var TTLTriggerHandler = allino.NewFunction(
+	allino.Option{
 		Path:        "/api/ttltest",
 		Method:      "GET",
 		ContentType: allino.JSON,
 	},
-	func(r *allino.Request, param TTLTriggerInput) (*TTLTriggerOutput, error) {
+	func(r *allino.Runtime, param TTLTriggerInput) (*TTLTriggerOutput, error) {
 
 		out, err := TTLWorkerHandler.Call(r, TTLInput{
 			Value: param.Value,
@@ -99,17 +98,16 @@ type IntervalOutput struct {
 	Result string
 }
 
-var IntervalWorkerHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
-		Name:     "interval-worker",
-		Version:  "1.0.0",
-		JobMode:  "dispatch",
-		Internal: true,
+var IntervalWorkerHandler = allino.NewFunction(
+	allino.Option{
+		Name:    "interval-worker",
+		Version: "1.0.0",
+		JobMode: "dispatch",
 		Job: allino.JobOption{
 			Interval: 3 * time.Second,
 		},
 	},
-	func(r *allino.Request, param IntervalInput) (*IntervalOutput, error) {
+	func(r *allino.Runtime, param IntervalInput) (*IntervalOutput, error) {
 
 		atomic.AddInt32(&IntervalExecutionCount, 1)
 
@@ -134,13 +132,13 @@ type IntervalTriggerOutput struct {
 	Status string `json:"status"`
 }
 
-var IntervalTriggerHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var IntervalTriggerHandler = allino.NewFunction(
+	allino.Option{
 		Path:        "/api/intervaltest",
 		Method:      "GET",
 		ContentType: allino.JSON,
 	},
-	func(r *allino.Request, param IntervalTriggerInput) (*IntervalTriggerOutput, error) {
+	func(r *allino.Runtime, param IntervalTriggerInput) (*IntervalTriggerOutput, error) {
 
 		out, err := IntervalWorkerHandler.Call(r, IntervalInput{
 			Value: param.Value,

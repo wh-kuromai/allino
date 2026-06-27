@@ -105,14 +105,14 @@ func (f *Future[U]) Await() (U, error) {
 	return f.result, f.err
 }
 
-func (rw *GenericTypedHandler[T, U, E]) Go(r *Request, input T) *Future[U] {
+func (rw *GenericFunction[T, U, E]) Go(r *Runtime, input T) *Future[U] {
 	//f := &Future[U]{}
 	f := NewFuture[U]()
 	rw.go_internal(r, input, f)
 	return f
 }
 
-func (rw *GenericTypedHandler[T, U, E]) go_internal(r *Request, input T, f *Future[U]) {
+func (rw *GenericFunction[T, U, E]) go_internal(r *Runtime, input T, f *Future[U]) {
 	out, err := rw.Call(r, input)
 
 	waitf := func(perr *JobPendingError) {

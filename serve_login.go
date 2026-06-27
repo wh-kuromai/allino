@@ -140,12 +140,12 @@ func (c *LoginConfig) PrivateKey() cryptino.PrivateKey {
 }
 */
 
-func (r *Request) User() (uid, displayname string, writable bool, err error) {
+func (r *Runtime) User() (uid, displayname string, writable bool, err error) {
 	uid, displayname, writable, _, err = r.userWithJWT()
 	return
 }
 
-func (r *Request) Claim(key string) (value string, err error) {
+func (r *Runtime) Claim(key string) (value string, err error) {
 	_, _, _, jwtbody, err := r.userWithJWT()
 	if err != nil {
 		return "", err
@@ -164,7 +164,7 @@ func (r *Request) Claim(key string) (value string, err error) {
 	return
 }
 
-func (r *Request) ClaimUnmarshal(obj any) error {
+func (r *Runtime) ClaimUnmarshal(obj any) error {
 	_, _, _, jwtbody, err := r.userWithJWT()
 	if err != nil {
 		return err
@@ -173,7 +173,7 @@ func (r *Request) ClaimUnmarshal(obj any) error {
 	return json.Unmarshal(jwtbody, obj)
 }
 
-func (r *Request) userWithJWT() (uid, displayname string, writable bool, jwtbody []byte, err error) {
+func (r *Runtime) userWithJWT() (uid, displayname string, writable bool, jwtbody []byte, err error) {
 	du := r.fiber.Query(".user")
 	if r.config.Debug && du != "" {
 		r.cache.authorizedBy = "debug"
@@ -216,7 +216,7 @@ func (r *Request) userWithJWT() (uid, displayname string, writable bool, jwtbody
 	return "", "", false, nil, ErrNotLoggedIn
 }
 
-func (r *Request) user() (jwt *cryptino.JSONWebToken, writable bool, err error) { //(uid, displayname string, writable bool, body []byte, err error) {
+func (r *Runtime) user() (jwt *cryptino.JSONWebToken, writable bool, err error) { //(uid, displayname string, writable bool, body []byte, err error) {
 
 	pub := r.config.Login.PublicKey
 	if pub == nil {
@@ -290,7 +290,7 @@ func (r *Request) user() (jwt *cryptino.JSONWebToken, writable bool, err error) 
 	//return "", "", false, nil, ErrNotLoggedIn
 }
 
-func (r *Request) SessionID(setcookie bool) string {
+func (r *Runtime) SessionID(setcookie bool) string {
 	if r.cache.sessionid != "" {
 		return r.cache.sessionid
 	}
@@ -323,7 +323,7 @@ func (r *Request) SessionID(setcookie bool) string {
 	return r.cache.sessionid
 }
 
-func (r *Request) AssumeUser(uid, displayname string, writable bool) {
+func (r *Runtime) AssumeUser(uid, displayname string, writable bool) {
 	r.cache.cachedLogin = true
 	r.cache.cachedUid = uid
 	r.cache.cachedName = displayname
@@ -331,11 +331,11 @@ func (r *Request) AssumeUser(uid, displayname string, writable bool) {
 	r.cache.authorizedBy = "simulate"
 }
 
-func (r *Request) AuthorizedBy() string {
+func (r *Runtime) AuthorizedBy() string {
 	return r.cache.authorizedBy
 }
 
-func IssueCSRFToken(r *Request, uid string) string {
+func IssueCSRFToken(r *Runtime, uid string) string {
 	jwt := cryptino.GetJWTBasic(uid, r.config.Login.CSRFToken.Expire)
 	jwt.Body.Audience = r.config.Login.CSRFToken.JWTAudience
 
@@ -347,7 +347,7 @@ func IssueCSRFToken(r *Request, uid string) string {
 	return csrftoken
 }
 
-func IssueAccessToken(r *Request, uid, name string, custom ...map[string]any) string {
+func IssueAccessToken(r *Runtime, uid, name string, custom ...map[string]any) string {
 	jwt := cryptino.GetJWTBasic(uid, r.config.Login.OAuth.Expire)
 	jwt.Body.Audience = r.config.Login.OAuth.JWTAudience
 	jwt.Body.Name = name
@@ -363,7 +363,7 @@ func IssueAccessToken(r *Request, uid, name string, custom ...map[string]any) st
 	return accesstoken
 }
 
-func IssueAPIKey(r *Request, uid, name string, custom ...map[string]any) string {
+func IssueAPIKey(r *Runtime, uid, name string, custom ...map[string]any) string {
 	jwt := cryptino.GetJWTBasic(uid, r.config.Login.OAuth.ExpireLong)
 	jwt.Body.Audience = r.config.Login.OAuth.JWTAudience
 	jwt.Body.Name = name
@@ -379,7 +379,7 @@ func IssueAPIKey(r *Request, uid, name string, custom ...map[string]any) string 
 	return accesstoken
 }
 
-func IssueLoginCookie(r *Request, uid, name string, custom ...map[string]any) *fiber.Cookie {
+func IssueLoginCookie(r *Runtime, uid, name string, custom ...map[string]any) *fiber.Cookie {
 	jwt := cryptino.GetJWTBasic(uid, r.config.Login.LoginCookie.Expire)
 	jwt.Body.Audience = r.config.Login.LoginCookie.JWTAudience
 	jwt.Body.Name = name
@@ -396,7 +396,7 @@ func IssueLoginCookie(r *Request, uid, name string, custom ...map[string]any) *f
 	return r.config.Login.LoginCookie.ToFiberCookie(string(jwtbuf))
 }
 
-func IssueGuestCookie(r *Request) *fiber.Cookie {
+func IssueGuestCookie(r *Runtime) *fiber.Cookie {
 	sid := r.SessionID(false)
 	jwt := cryptino.GetJWTBasic(sid, r.config.Login.GuestCookie.Expire)
 	jwt.Body.Audience = r.config.Login.GuestCookie.JWTAudience

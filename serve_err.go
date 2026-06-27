@@ -137,7 +137,7 @@ func (e *Error) JSON() []byte {
 	return js
 }
 
-func (r *Request) errorRedirect(statusCode int, err error) {
+func (r *Runtime) errorRedirect(statusCode int, err error) {
 	ecerr, ok2 := err.(errorcodeError)
 	if ok2 {
 		r.fiber.Set("Location", r.config.Routing.ErrorPath+ecerr.ErrorCode())
@@ -155,7 +155,7 @@ func (r *Request) errorRedirect(statusCode int, err error) {
 	}
 }
 
-func (r *Request) errorJSON(statusCode int, nowrap bool, eiserror bool, errz error) {
+func (r *Runtime) errorJSON(statusCode int, nowrap bool, eiserror bool, errz error) {
 	var err error
 	//r.logger.Info("errorJSON", zap.Error(errz))
 	cerr, ok := errz.(HttpError)

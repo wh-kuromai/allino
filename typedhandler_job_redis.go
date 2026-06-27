@@ -33,7 +33,7 @@ type RedisStreamType struct {
 	total    int64
 }
 
-func (rw *GenericTypedHandler[T, U, E]) call_stream(r *Request, input T, fromcall bool) (output U, err error) {
+func (rw *GenericFunction[T, U, E]) call_stream(r *Runtime, input T, fromcall bool) (output U, err error) {
 	var zeroU U
 
 	inJSON, err := json.Marshal(input)
@@ -70,7 +70,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_stream(r *Request, input T, fromcal
 	return zeroU, NewJobPendingError(xaddid, "job fanout accepted")
 }
 
-func callRedisInit(s *Server, opt *HandlerOption) error {
+func callRedisInit(s *Server, opt *Option) error {
 	var rst *RedisStreamType
 	switch opt.JobMode {
 	case JOBMODE_FANOUT:
@@ -164,7 +164,7 @@ func callRedisInitEnd(s *Server) error {
 	return nil
 }
 
-func (c *callRedisStrategy) IsTarget(opt *HandlerOption) bool {
+func (c *callRedisStrategy) IsTarget(opt *Option) bool {
 	switch opt.JobMode {
 	case JOBMODE_FANOUT:
 		return true

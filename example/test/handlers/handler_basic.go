@@ -16,8 +16,8 @@ type EchoAPIOutput struct {
 	StartAt time.Time `json:"startAt"`
 }
 
-var EchoAPITypedHandler = allino.NewTypedAPI("/test/echo",
-	func(r *allino.Request, param *EchoAPIInput) (*EchoAPIOutput, error) {
+var EchoAPIFunction = allino.NewTypedAPI("/test/echo",
+	func(r *allino.Runtime, param *EchoAPIInput) (*EchoAPIOutput, error) {
 		// Actual API logic here.
 		return &EchoAPIOutput{
 			Status:  "OK",
@@ -36,8 +36,8 @@ type PathParamAPIOutput struct {
 	Form   string `json:"form,omitempty"`
 }
 
-var PathParamAPITypedHandler = allino.NewTypedAPI("/test/pathparam/:mypath",
-	func(r *allino.Request, param *PathParamAPIInput) (*PathParamAPIOutput, error) {
+var PathParamAPIFunction = allino.NewTypedAPI("/test/pathparam/:mypath",
+	func(r *allino.Runtime, param *PathParamAPIInput) (*PathParamAPIOutput, error) {
 		// Actual API logic here.
 		return &PathParamAPIOutput{
 			Status: "OK",
@@ -55,14 +55,14 @@ type ValidationAPIOutput struct {
 	Message string `json:"message"`
 }
 
-var ValidationAPITypedHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var ValidationAPIFunction = allino.NewFunction(
+	allino.Option{
 		Path:        "/test/validate",
 		Method:      "POST",
 		ContentType: "application/json",
 		Summary:     "Input validation example",
 	},
-	func(r *allino.Request, param *ValidationAPIInput) (*ValidationAPIOutput, error) {
+	func(r *allino.Runtime, param *ValidationAPIInput) (*ValidationAPIOutput, error) {
 		return &ValidationAPIOutput{
 			Message: "Valid input received: " + param.Name + " <" + param.Email + ">",
 		}, nil
@@ -76,8 +76,8 @@ type ErrorTestAPIOutput struct {
 	Message string `json:"message"`
 }
 
-var ErrorTestAPITypedHandler = allino.NewTypedAPI("/test/error",
-	func(r *allino.Request, param *ErrorTestAPIInput) (*ErrorTestAPIOutput, error) {
+var ErrorTestAPIFunction = allino.NewTypedAPI("/test/error",
+	func(r *allino.Runtime, param *ErrorTestAPIInput) (*ErrorTestAPIOutput, error) {
 		switch param.Mode {
 		case "normal":
 			return nil, errors.New("something went wrong")
@@ -94,14 +94,14 @@ type RedirectAPIInput struct {
 	Target string `query:"target" validate:"required,url"`
 }
 
-var RedirectAPITypedHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var RedirectAPIFunction = allino.NewFunction(
+	allino.Option{
 		Path:        "/test/redirect",
 		Method:      "GET",
 		ContentType: "text/html",
 		Summary:     "Redirect test API",
 	},
-	func(r *allino.Request, param *RedirectAPIInput) (any, error) {
+	func(r *allino.Runtime, param *RedirectAPIInput) (any, error) {
 		return nil, &allino.RedirectError{
 			StatusCode: 302,
 			Location:   param.Target,

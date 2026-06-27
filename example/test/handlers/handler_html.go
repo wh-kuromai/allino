@@ -11,15 +11,15 @@ type HTMLTemplateOutput struct {
 	Message string
 }
 
-var HTMLTemplateHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var HTMLTemplateHandler = allino.NewFunction(
+	allino.Option{
 		Path:               "/test/html",
 		Method:             "GET",
 		ContentType:        "text/html",
 		HTMLTemplate:       `<html><body><h1>Hello, {{.Message}}!</h1></body></html>`,
 		ResponseStatusCode: 200,
 	},
-	func(r *allino.Request, param *HTMLTemplateInput) (*HTMLTemplateOutput, error) {
+	func(r *allino.Runtime, param *HTMLTemplateInput) (*HTMLTemplateOutput, error) {
 		return &HTMLTemplateOutput{
 			Message: param.Name,
 		}, nil

@@ -27,7 +27,7 @@ type ShortURLRegistOutput struct {
 }
 
 var ShortURLRegist = allino.NewTypedAPI("/api/shorten",
-	func(r *allino.Request, input *ShortURLRegistInput) (*ShortURLRegistOutput, error) {
+	func(r *allino.Runtime, input *ShortURLRegistInput) (*ShortURLRegistOutput, error) {
 		if r.Redis == nil {
 			return nil, &allino.CodeError{StatusCode: 500, Code: "no_redis", Msg: "Redis not available"}
 		}
@@ -62,7 +62,7 @@ type ShortURLRedirectInput struct {
 }
 
 var ShortURLRedirect = allino.NewTypedUI("/s/:sid",
-	func(r *allino.Request, input *ShortURLRedirectInput) (string, error) {
+	func(r *allino.Runtime, input *ShortURLRedirectInput) (string, error) {
 		if r.Redis == nil {
 			return "", &allino.CodeError{StatusCode: 500, Code: "no_redis", Msg: "Redis not available"}
 		}
@@ -94,4 +94,4 @@ Let me know if you want:
 * A custom base62 encoder instead of base64.
 * URL expiration support.
 * User authentication integration (`r.User()`).
-* OpenAPI documentation annotations (via `HandlerOption`).
+* OpenAPI documentation annotations (via `Option`).

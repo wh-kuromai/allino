@@ -13,11 +13,11 @@ import (
 
 //type TypedRouter struct {
 //	server            *Server
-//	typedHandlerCache []TypedHandler
-//	optionsCache      []*HandlerOption
+//	FunctionCache []Function
+//	optionsCache      []*Option
 //}
 
-func (r *Server) TypedHandle(th TypedHandler) {
+func (r *Server) TypedHandle(th Function) {
 	if th.Options().Cron != "" {
 
 		rcron, err := randcron.Expand(th.Options().Cron, r.ServerID())
@@ -39,7 +39,7 @@ func (r *Server) TypedHandle(th TypedHandler) {
 	}
 
 	opt := th.Options()
-	if opt.Internal || opt.Path == "" {
+	if opt.Path == "" {
 		r.internalHandlerCache = append(r.internalHandlerCache, th)
 		return
 	}
@@ -52,7 +52,7 @@ func (r *Server) TypedHandle(th TypedHandler) {
 		})
 	}
 
-	requestFn := func(req *Request) {
+	requestFn := func(req *Runtime) {
 		//req.cache.options = th.Options()
 		if req.fiber != nil {
 			req.loggerWith = req.Logger().With(
@@ -74,7 +74,7 @@ func (r *Server) TypedHandle(th TypedHandler) {
 		th.HandleRequest(req)
 	}
 
-	r.typedHandlerCache = append(r.typedHandlerCache, th)
+	r.FunctionCache = append(r.FunctionCache, th)
 	r.HandleRequestFunc(opt.Method, opt.Path, requestFn)
 
 	for _, m := range opt.SubMethod {
@@ -82,13 +82,13 @@ func (r *Server) TypedHandle(th TypedHandler) {
 	}
 }
 
-func (s *Server) TypedHandleWithPath(pattern string, th TypedHandler) {
+func (s *Server) TypedHandleWithPath(pattern string, th Function) {
 	nth := th.Copy()
 	nth.Options().Path = pattern
 	s.TypedHandle(th)
 }
 
-func (r *Server) TypedHandleFiber(options HandlerOption, h fiber.Handler) {
+func (r *Server) TypedHandleFiber(options Option, h fiber.Handler) {
 	opt := &options
 	if options.CORS || r.Config.Debug {
 		r.Fiber.Add("OPTIONS", options.Path, func(w *fiber.Ctx) error {
@@ -105,7 +105,7 @@ func (r *Server) TypedHandleFiber(options HandlerOption, h fiber.Handler) {
 	}
 }
 
-func addCORSHeaders(options *HandlerOption, w *fiber.Ctx) {
+func addCORSHeaders(options *Option, w *fiber.Ctx) {
 	if options != nil && options.CORSCustomHeader != nil {
 		for k, v := range options.CORSCustomHeader {
 			w.Set(k, v)
@@ -118,17 +118,17 @@ func addCORSHeaders(options *HandlerOption, w *fiber.Ctx) {
 	w.Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 }
 
-func (r *Server) RegisteredTypedHandlers() []*HandlerOption {
-	ho := make([]*HandlerOption, 0, 20)
-	// 1. typedHandlerCache から
-	for _, h := range r.typedHandlerCache {
+func (r *Server) RegisteredFunctions() []*Option {
+	ho := make([]*Option, 0, 20)
+	// 1. FunctionCache から
+	for _, h := range r.FunctionCache {
 		ho = append(ho, h.Options())
 	}
 
 	// 2. optionsCache から（通常の http.Handler も含める想定）
 	ho = append(ho, r.optionsCache...)
 
-	slices.SortFunc(ho, func(a, b *HandlerOption) int {
+	slices.SortFunc(ho, func(a, b *Option) int {
 		return cmp.Compare(a.Path, b.Path)
 	})
 

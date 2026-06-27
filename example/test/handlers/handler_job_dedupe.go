@@ -17,8 +17,8 @@ type DedupeOutput struct {
 	Result string `json:"result"`
 }
 
-var DedupeHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var DedupeHandler = allino.NewFunction(
+	allino.Option{
 		Path:        "/api/dedupetest",
 		Method:      "GET",
 		ContentType: allino.JSON,
@@ -26,7 +26,7 @@ var DedupeHandler = allino.NewTypedHandler(
 		Version:     "1.0.0",
 		JobMode:     "dedupe",
 	},
-	func(r *allino.Request, param DedupeInput) (*DedupeOutput, error) {
+	func(r *allino.Runtime, param DedupeInput) (*DedupeOutput, error) {
 
 		atomic.AddInt32(&DedupeExecutionCount, 1)
 

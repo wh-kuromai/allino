@@ -9,21 +9,21 @@ import (
 
 type AI interface {
 	Inference(
-		r *Request,
+		r *Runtime,
 		messages []map[string]any,
-		caller TypedHandler,
-		tools []TypedHandler,
+		caller Function,
+		tools []Function,
 	) (string, error)
 }
 
 var registeredAI = map[string]func(config *AIConfig, model string) AI{}
 
-func RegisterAI(provider string, fn func(config *AIConfig, model string) AI) error {
+func RegisterAIProvider(provider string, fn func(config *AIConfig, model string) AI) error {
 	registeredAI[provider] = fn
 	return nil
 }
 
-func NewAI(config *AIConfig, provider, model string) AI {
+func NewAIProvider(config *AIConfig, provider, model string) AI {
 	fn, ok := registeredAI[provider]
 	if ok {
 		return fn(config, model)
@@ -31,7 +31,7 @@ func NewAI(config *AIConfig, provider, model string) AI {
 	return nil
 }
 
-func NewTypedAI[T, U any](option HandlerOption, model, prompt string, tools []TypedHandler) *GenericTypedHandler[T, U, error] {
+func NewAI[T, U any](option Option, model, prompt string, tools ...Function) *GenericFunction[T, U, error] {
 	fm, promptbody, ok := SplitFrontMatter(prompt)
 	if ok {
 		var sfm SkillFrontMatter
@@ -54,9 +54,9 @@ func NewTypedAI[T, U any](option HandlerOption, model, prompt string, tools []Ty
 		return nil
 	}
 
-	var th *GenericTypedHandler[T, U, error]
-	th = NewTypedHandler(option,
-		func(r *Request, input T) (output U, err error) {
+	var th *GenericFunction[T, U, error]
+	th = NewFunction(option,
+		func(r *Runtime, input T) (output U, err error) {
 			var zeroU U
 
 			buf, err := yaml.Marshal(input)
@@ -117,9 +117,9 @@ func SplitFrontMatter(s string) (fm string, body string, ok bool) {
 }
 
 func findTool(
-	tools []TypedHandler,
+	tools []Function,
 	name string,
-) TypedHandler {
+) Function {
 
 	for _, t := range tools {
 		if t.Options().Name == name {

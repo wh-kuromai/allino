@@ -2,7 +2,7 @@ package allino
 
 import "go.uber.org/zap"
 
-func callSQLInit(s *Server, opt *HandlerOption) error {
+func callSQLInit(s *Server, opt *Option) error {
 	sqlneed := false
 	switch opt.JobMode {
 	case JOBMODE_ASYNC:

@@ -65,17 +65,17 @@ type JobOption struct {
 var JobExtension = NewExtension[any, any](
 	"job",
 	&ExtOption{
-		OnHandlerInit: func(s *Server, virtual *Request, opt *HandlerOption) (err error) {
+		OnHandlerInit: func(s *Server, virtual *Runtime, opt *Option) (err error) {
 			err = callSQLInit(s, opt)
 			if err != nil && !s.Config.Log.Silent {
-				s.Logger.Fatal(
+				s.Logger.Warn(
 					"job OnHandlerInit failed",
 					zap.Error(err),
 				)
 			}
 			err = callRedisInit(s, opt)
 			if err != nil && !s.Config.Log.Silent {
-				s.Logger.Fatal(
+				s.Logger.Warn(
 					"redis stream OnHandlerInit failed",
 					zap.Error(err),
 				)
@@ -84,10 +84,10 @@ var JobExtension = NewExtension[any, any](
 			return nil
 		},
 
-		OnServe: func(s *Server, virtual *Request) (err error) {
+		OnServe: func(s *Server, virtual *Runtime) (err error) {
 			err = callRedisInitEnd(s)
 			if err != nil && !s.Config.Log.Silent {
-				s.Logger.Fatal(
+				s.Logger.Warn(
 					"redis stream OnServe failed",
 					zap.Error(err),
 				)
@@ -95,7 +95,7 @@ var JobExtension = NewExtension[any, any](
 			return
 		},
 
-		OnShutdown: func(s *Server, virtual *Request) error {
+		OnShutdown: func(s *Server, virtual *Runtime) error {
 			return nil
 		},
 	},
@@ -120,7 +120,7 @@ func find_handler(sv *Server, handler string) (string, error) {
 }
 
 // called from CLI
-func call_direct(sv *Server, r *Request, handler string, injson []byte, infunc func(input any) error) (key string, outjson []byte, err []byte, syserr error) {
+func call_direct(sv *Server, r *Runtime, handler string, injson []byte, infunc func(input any) error) (key string, outjson []byte, err []byte, syserr error) {
 
 	opt := sv.handlerOptMap[handler]
 
@@ -139,7 +139,7 @@ func call_direct(sv *Server, r *Request, handler string, injson []byte, infunc f
 	return opt.consumer(r, encodeHandlerName(opt), handlerVersion(opt), injson, true, infunc)
 }
 
-func unmarshalfnMake[U any, E error](r *Request, opt *HandlerOption, upool *ReflectPool[U], epool *ReflectPool[E], handler string) func(ji JobInfo, outjson []byte, errjson []byte, serr error) (output U, err error, syserr error) {
+func unmarshalfnMake[U any, E error](r *Runtime, opt *Option, upool *ReflectPool[U], epool *ReflectPool[E], handler string) func(ji JobInfo, outjson []byte, errjson []byte, serr error) (output U, err error, syserr error) {
 	return func(ji JobInfo, outjson []byte, errjson []byte, serr error) (output U, err error, syserr error) {
 
 		var zeroU U
@@ -207,7 +207,7 @@ func unmarshalfnMake[U any, E error](r *Request, opt *HandlerOption, upool *Refl
 }
 
 // called from HTTP or Handler.Call
-func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall bool) (output U, err error) {
+func (rw *GenericFunction[T, U, E]) call_job(r *Runtime, input T, fromcall bool) (output U, err error) {
 
 	var zeroU U
 	opt := rw.options
@@ -379,7 +379,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_job(r *Request, input T, fromcall b
 }
 
 // called from CLI or Worker
-func (rw *GenericTypedHandler[T, U, E]) job_consume(r *Request, handler, version string, injson []byte, direct bool, infunc func(input any) error) (key string, outputz []byte, errjsonz []byte, syserr error) {
+func (rw *GenericFunction[T, U, E]) job_consume(r *Runtime, handler, version string, injson []byte, direct bool, infunc func(input any) error) (key string, outputz []byte, errjsonz []byte, syserr error) {
 
 	var input T
 	var innererr error
@@ -448,7 +448,7 @@ func (rw *GenericTypedHandler[T, U, E]) job_consume(r *Request, handler, version
 	return key, outJSON, errJSON, syserr
 }
 
-func (rw *GenericTypedHandler[T, U, E]) JobResult(r *Request, jobid string) (output U, err error) {
+func (rw *GenericFunction[T, U, E]) JobResult(r *Runtime, jobid string) (output U, err error) {
 	var zeroU U
 	var syserr error
 

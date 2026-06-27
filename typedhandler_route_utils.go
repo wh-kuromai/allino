@@ -10,7 +10,7 @@ import (
 	"github.com/wh-kuromai/jsonino"
 )
 
-func generateRouteFromOptions(opt *HandlerOption) (string, string) {
+func generateRouteFromOptions(opt *Option) (string, string) {
 	inputType := opt.inputType
 	if inputType.Kind() == reflect.Ptr {
 		inputType = inputType.Elem()

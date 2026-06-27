@@ -15,7 +15,7 @@ var revoker *Revoker
 var RevokerExtension = allino.NewExtension[any, any](
 	"revoker",
 	&allino.ExtOption{
-		OnAuthZ: func(r *allino.Request, jwt *cryptino.JSONWebToken) (*cryptino.JSONWebToken, error) {
+		OnAuthZ: func(r *allino.Runtime, jwt *cryptino.JSONWebToken) (*cryptino.JSONWebToken, error) {
 			if r.Config().Login.Revoke.UseLoginRevoke {
 				revoked, reason := revoker.IsRevoked(jwt.Body.Subject, time.Unix(jwt.Body.IssuedAt, 0))
 				if revoked {
@@ -37,25 +37,25 @@ type RevokeInput struct {
 type RevokeOutput struct {
 }
 
-var RevokeHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var RevokeHandler = allino.NewFunction(
+	allino.Option{
 		Name:    "revoker",
 		Version: "1.0.0",
 		JobMode: "fanout",
 	},
-	func(r *allino.Request, param *RevokeInput) (*RevokeOutput, error) {
+	func(r *allino.Runtime, param *RevokeInput) (*RevokeOutput, error) {
 		revoker.Insert(param.Scope, param.Time, param.Reason)
 		return nil, nil
 	},
 )
 
-var RevokePrefixHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var RevokePrefixHandler = allino.NewFunction(
+	allino.Option{
 		Name:    "revoker-prefix",
 		Version: "1.0.0",
 		JobMode: "fanout",
 	},
-	func(r *allino.Request, param *RevokeInput) (*RevokeOutput, error) {
+	func(r *allino.Runtime, param *RevokeInput) (*RevokeOutput, error) {
 		revoker.InsertPrefix(param.Scope, param.Time, param.Reason)
 		return nil, nil
 	},
@@ -136,7 +136,7 @@ func (r *Revoker) current() *revokeBucket {
 	return &(*buckets)[0]
 }
 
-func (r *Revoker) Revoke(req *allino.Request, scope string, t time.Time, reason string) {
+func (r *Revoker) Revoke(req *allino.Runtime, scope string, t time.Time, reason string) {
 	idx := strings.Index(scope, "*")
 	if idx < 0 {
 		RevokeHandler.Call(req, &RevokeInput{
@@ -205,10 +205,10 @@ func (r *Revoker) isRevokedPrefix(scope string, issuedAt time.Time) (revoked boo
 	return
 }
 
-func Revoke(r *allino.Request, scope string, reason string) {
+func Revoke(r *allino.Runtime, scope string, reason string) {
 	revoker.Revoke(r, scope, time.Now(), reason)
 }
 
-func IsRevoked(r *allino.Request, scope string, issuedAt time.Time) (revoked bool, reason string) {
+func IsRevoked(r *allino.Runtime, scope string, issuedAt time.Time) (revoked bool, reason string) {
 	return revoker.IsRevoked(scope, issuedAt)
 }

@@ -21,14 +21,13 @@ type AsyncOutput struct {
 	Result string
 }
 
-var AsyncWorkerHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
-		Name:     "async-worker",
-		Version:  "1.0.0",
-		JobMode:  "async",
-		Internal: true, // HTTP公開不要
+var AsyncWorkerHandler = allino.NewFunction(
+	allino.Option{
+		Name:    "async-worker",
+		Version: "1.0.0",
+		JobMode: "async",
 	},
-	func(r *allino.Request, param AsyncInput) (*AsyncOutput, error) {
+	func(r *allino.Runtime, param AsyncInput) (*AsyncOutput, error) {
 
 		atomic.AddInt32(&AsyncExecutionCount, 1)
 
@@ -54,13 +53,13 @@ type TriggerOutput struct {
 	Status string `json:"status"`
 }
 
-var TriggerHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var TriggerHandler = allino.NewFunction(
+	allino.Option{
 		Path:        "/api/asynctest",
 		Method:      "GET",
 		ContentType: allino.JSON,
 	},
-	func(r *allino.Request, param TriggerInput) (*TriggerOutput, error) {
+	func(r *allino.Runtime, param TriggerInput) (*TriggerOutput, error) {
 
 		out, err := AsyncWorkerHandler.Call(r, AsyncInput{
 			Value: param.Value,

@@ -91,17 +91,17 @@ func TestHealthcheckAPI(t *testing.T) {
 ---
 // The following utilities are available when writing tests with allino:
 package alltest // github.com/wh-kuromai/allino/alltest
-// In most cases, you don't need to construct *allino.Request manually.
-func NewTestRequest(s *allino.Server) *allino.Request
+// In most cases, you don't need to construct *allino.Runtime manually.
+func NewTestRequest(s *allino.Server) *allino.Runtime
 ---
 package allino //github.com/wh-kuromai/allino
 // IssueAccessToken issues a short-lived token used to API access.
-func IssueAccessToken(r *Request, uid, name string) string
+func IssueAccessToken(r *Runtime, uid, name string) string
 // IssueCSRFToken issues a short-lived token used to protect write operations from CSRF attacks.
-func IssueCSRFToken(r *Request, uid string) string
+func IssueCSRFToken(r *Runtime, uid string) string
 // IssueLoginCookie issues a login cookie for user authentication.
-func IssueLoginCookie(r *Request, uid, name string) *http.Cookie
-// allino wraps API responses by default. (unless HandlerOption.NoWrapJSON = true)
+func IssueLoginCookie(r *Runtime, uid, name string) *http.Cookie
+// allino wraps API responses by default. (unless Option.NoWrapJSON = true)
 type APIResponse[T any] struct {
 	Data T `json:"data"`
 }

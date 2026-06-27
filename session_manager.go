@@ -38,7 +38,7 @@ type SessionConfig struct {
 
 func (c *SessionConfig) setup(sv *Server) (*sessionManager, error) {
 	s := &sessionManager{
-		createSessionMap:   make(map[string]*GenericTypedHandler[*CreateSessionInput, *CreateSessionOutput, error]),
+		createSessionMap:   make(map[string]*GenericFunction[*CreateSessionInput, *CreateSessionOutput, error]),
 		sessionStore:       make(map[string]*stickySessionEntry),
 		resourceConsumeMap: make(map[string]int),
 	}
@@ -50,7 +50,7 @@ func (c *SessionConfig) setup(sv *Server) (*sessionManager, error) {
 var SessionExtension = NewExtension[any, any](
 	"session",
 	&ExtOption{
-		OnHandlerInit: func(s *Server, virtual *Request, opt *HandlerOption) (err error) {
+		OnHandlerInit: func(s *Server, virtual *Runtime, opt *Option) (err error) {
 			if opt.Session.Type == "sticky" {
 				if s.session == nil {
 					s.session, err = s.Config.Session.setup(s)
@@ -68,7 +68,7 @@ var SessionExtension = NewExtension[any, any](
 
 type sessionManager struct {
 	// immutable
-	createSessionMap map[string]*GenericTypedHandler[*CreateSessionInput, *CreateSessionOutput, error]
+	createSessionMap map[string]*GenericFunction[*CreateSessionInput, *CreateSessionOutput, error]
 
 	// sessionStore is protected by dequeueMu
 	sessionStore map[string]*stickySessionEntry
@@ -93,9 +93,9 @@ func (s *sessionManager) addSessionGroup(sv *Server, name string) {
 		return
 	}
 
-	var handler *GenericTypedHandler[*CreateSessionInput, *CreateSessionOutput, error]
-	handler = NewTypedHandler(
-		HandlerOption{
+	var handler *GenericFunction[*CreateSessionInput, *CreateSessionOutput, error]
+	handler = NewFunction(
+		Option{
 			Name:    "allino_create_session_" + name,
 			Version: "1.0.0",
 			JobMode: "dispatch",
@@ -103,7 +103,7 @@ func (s *sessionManager) addSessionGroup(sv *Server, name string) {
 				CacheExpire: 15 * time.Minute,
 			},
 		},
-		func(r *Request, param *CreateSessionInput) (*CreateSessionOutput, error) {
+		func(r *Runtime, param *CreateSessionInput) (*CreateSessionOutput, error) {
 			sid := xid.New().String()
 
 			entry := &stickySessionEntry{
@@ -157,7 +157,7 @@ const (
 	CONSUME_OVERFLOW
 )
 
-func (s *sessionManager) entry_consume(r *Request, entry *stickySessionEntry) int {
+func (s *sessionManager) entry_consume(r *Runtime, entry *stickySessionEntry) int {
 	if len(entry.use) == 0 {
 		return CONSUME_OK
 	}

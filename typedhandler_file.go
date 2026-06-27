@@ -107,17 +107,17 @@ func stripGzipSuffix(path string) string {
 }
 
 func NewFileJob[U any](
-	opt HandlerOption,
-	handler func(r *Request, path string, in io.Reader) (U, error),
-) *GenericTypedHandler[*FileInput, map[string]U, error] {
+	opt Option,
+	handler func(r *Runtime, path string, in io.Reader) (U, error),
+) *GenericFunction[*FileInput, map[string]U, error] {
 	if opt.Name == "" {
 		return nil
 	}
 
 	var zeroU U
-	var sjob, djob *GenericTypedHandler[*FileInput, map[string]U, error]
+	var sjob, djob *GenericFunction[*FileInput, map[string]U, error]
 
-	jobhandler := func(r *Request, rin *FileInput) (map[string]U, error) {
+	jobhandler := func(r *Runtime, rin *FileInput) (map[string]U, error) {
 		result := &ueResult[U]{}
 
 		// .zip
@@ -250,27 +250,25 @@ func NewFileJob[U any](
 		return result.Result()
 	}
 
-	sjob = NewTypedHandler(
-		HandlerOption{
-			Internal: true,
-			Name:     opt.Name + "-stream",
-			Version:  opt.Version,
-			JobMode:  "cache",
+	sjob = NewFunction(
+		Option{
+			Name:    opt.Name + "-stream",
+			Version: opt.Version,
+			JobMode: "cache",
 		},
 		jobhandler,
 	)
 
-	djob = NewTypedHandler(
-		HandlerOption{
-			Internal: true,
-			Name:     opt.Name + "-file",
-			Version:  opt.Version,
-			JobMode:  "dispatch",
+	djob = NewFunction(
+		Option{
+			Name:    opt.Name + "-file",
+			Version: opt.Version,
+			JobMode: "dispatch",
 		},
 		jobhandler,
 	)
 
-	th := NewTypedHandler(opt, func(r *Request, fi *FileInput) (map[string]U, error) {
+	th := NewFunction(opt, func(r *Runtime, fi *FileInput) (map[string]U, error) {
 		result := &ueResult[U]{}
 
 		walkErr := filepath.WalkDir(fi.Path, func(path string, d os.DirEntry, err error) error {

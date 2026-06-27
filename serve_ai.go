@@ -39,5 +39,5 @@ func (c *AIConfig) Select(model ...string) AI {
 	provider := selectedModel[:sidx]
 	pmodel := selectedModel[sidx+1:]
 
-	return NewAI(c, provider, pmodel)
+	return NewAIProvider(c, provider, pmodel)
 }

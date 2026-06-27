@@ -16,8 +16,8 @@ type CacheTestOutput struct {
 	Result string `json:"result"`
 }
 
-var CacheTestHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var CacheTestHandler = allino.NewFunction(
+	allino.Option{
 		Path:        "/api/cachetest",
 		Method:      "GET",
 		ContentType: allino.JSON,
@@ -25,7 +25,7 @@ var CacheTestHandler = allino.NewTypedHandler(
 		Version:     "1.0.0",
 		JobMode:     "cache",
 	},
-	func(r *allino.Request, param CacheTestInput) (*CacheTestOutput, error) {
+	func(r *allino.Runtime, param CacheTestInput) (*CacheTestOutput, error) {
 		atomic.AddInt32(&ExecutionCount, 1)
 		return &CacheTestOutput{
 			Result: "processed-" + param.Value,

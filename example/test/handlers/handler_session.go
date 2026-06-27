@@ -16,8 +16,8 @@ type StickyTestOutput struct {
 	Result string `json:"result"`
 }
 
-var StickyTestHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var StickyTestHandler = allino.NewFunction(
+	allino.Option{
 		Path:        "/api/stickysessiontest",
 		Method:      "GET",
 		ContentType: allino.JSON,
@@ -28,7 +28,7 @@ var StickyTestHandler = allino.NewTypedHandler(
 			Name: "test",
 		},
 	},
-	func(r *allino.Request, param StickyTestInput) (*StickyTestOutput, error) {
+	func(r *allino.Runtime, param StickyTestInput) (*StickyTestOutput, error) {
 		atomic.AddInt32(&StickyExecutionCount, 1)
 		return &StickyTestOutput{
 			Result: "processed-" + param.Value,

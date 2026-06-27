@@ -33,15 +33,15 @@ type QRCodeInput struct {
 	Text string `query:"text" validate:"required"`
 }
 
-var QRCodeAPI = allino.NewTypedHandler(
-	&allino.HandlerOption{
+var QRCodeAPI = allino.NewFunction(
+	&allino.Option{
 		Path:        "/api/qrcode",
 		Method:      "GET",
 		ContentType: "image/png", // return raw image data
 		Summary:     "Generate QR code",
 		Description: "Returns a QR code image (PNG) for the given text.",
 	},
-	func(r *allino.Request, input *QRCodeInput) ([]byte, error) {
+	func(r *allino.Runtime, input *QRCodeInput) ([]byte, error) {
 		png, err := qrcode.Encode(input.Text, qrcode.Medium, 256) // 256x256 PNG
 		if err != nil {
 			return nil, &allino.CodeError{

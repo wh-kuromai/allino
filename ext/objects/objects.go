@@ -104,7 +104,7 @@ ON node(parent_id, name);
 
 				`
 			},
-			OnInit: func(s *allino.Server, virtual *allino.Request) error {
+			OnInit: func(s *allino.Server, virtual *allino.Runtime) error {
 				vfs := &AllObjects{
 					SQLObjects: SQLObjects{
 						db: s.SQL,
@@ -115,7 +115,7 @@ ON node(parent_id, name);
 				Root = vfs
 				return nil
 			},
-			OnInjection: func(r *allino.Request, targets []*allino.InjectionTarget) error {
+			OnInjection: func(r *allino.Runtime, targets []*allino.InjectionTarget) error {
 				ids := make([]uint64, len(targets))
 				for i, t := range targets {
 					ids[i] = r.Sqids().DecodeN(t.Input)
@@ -229,7 +229,7 @@ func (a *ACL) CheckNodeScopeAll(scope string) bool {
 	return true
 }
 
-func (a *AllObjects) ResolveACL(r *allino.Request, uid string, nodes []Node) (*ACL, error) {
+func (a *AllObjects) ResolveACL(r *allino.Runtime, uid string, nodes []Node) (*ACL, error) {
 	metacache, err := a.getUserMetaCache(r, uid)
 	if err != nil {
 		return nil, err

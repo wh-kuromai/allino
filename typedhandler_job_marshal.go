@@ -10,7 +10,7 @@ type genericHandlerJSON struct {
 	Version string `json:"version"`
 }
 
-func (rw *GenericTypedHandler[T, U, E]) MarshalJSON() ([]byte, error) {
+func (rw *GenericFunction[T, U, E]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&genericHandlerJSON{
 		Handler: encodeHandlerName(rw.options),
 		Version: handlerVersion(rw.options),
@@ -19,7 +19,7 @@ func (rw *GenericTypedHandler[T, U, E]) MarshalJSON() ([]byte, error) {
 
 var handlerMarshalMap = make(map[string]any)
 
-func (rw *GenericTypedHandler[T, U, E]) FindMaster() any {
+func (rw *GenericFunction[T, U, E]) FindMaster() any {
 	return handlerMarshalMap[rw.Handler]
 }
 

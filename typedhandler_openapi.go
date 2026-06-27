@@ -67,8 +67,8 @@ func (r *Server) GenerateOpenAPI() *OpenAPI {
 		Paths: make(map[string]map[string]*Operation),
 	}
 
-	// 1. typedHandlerCache から
-	for _, h := range r.typedHandlerCache {
+	// 1. FunctionCache から
+	for _, h := range r.FunctionCache {
 		opt := h.Options()
 		addOperationToOpenAPI(opt, openapi)
 	}
@@ -80,7 +80,7 @@ func (r *Server) GenerateOpenAPI() *OpenAPI {
 	return openapi
 }
 
-func addOperationToOpenAPI(opt *HandlerOption, openapi *OpenAPI) {
+func addOperationToOpenAPI(opt *Option, openapi *OpenAPI) {
 	method := strings.ToLower(opt.Method)
 	path := opt.Path
 
@@ -146,7 +146,7 @@ func parseParametersAndFormData(t reflect.Type) (
 	return
 }
 
-func generateOperationFromOptions(opt *HandlerOption) *Operation {
+func generateOperationFromOptions(opt *Option) *Operation {
 	if opt.Method == "" {
 		opt.Method = "GET"
 	}

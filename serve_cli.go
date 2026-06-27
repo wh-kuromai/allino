@@ -64,7 +64,7 @@ func NewCLI(config *Config, extconfig ...map[string]any) *CLI {
 			Short: "Start the web server",
 			Run: func(cmd *cobra.Command, args []string) {
 				s := CLIServer(cmd, args)
-				s.RegisterAllTypedHandler()
+				s.RegisterAllFunction()
 				s.Serve()
 			},
 		})
@@ -79,7 +79,7 @@ func NewCLI(config *Config, extconfig ...map[string]any) *CLI {
 				//pb := NewCLIApp()
 
 				s := CLIServer(cmd, args)
-				s.RegisterAllTypedHandler()
+				s.RegisterAllFunction()
 				s.serveInitOnly()
 
 				handler, err := find_handler(s, args[0])
@@ -154,7 +154,7 @@ func NewCLI(config *Config, extconfig ...map[string]any) *CLI {
 				config.ConfigDir = os.Getenv("PROXYVISOR_PLUGIN_CONFIG_DIR")
 				config.Bind = os.Getenv("PROXYVISOR_PLUGIN_ADDRESS")
 				s := CLIServer(cmd, args)
-				s.RegisterAllTypedHandler()
+				s.RegisterAllFunction()
 				s.Serve()
 			},
 		})
@@ -166,7 +166,7 @@ func NewCLI(config *Config, extconfig ...map[string]any) *CLI {
 			Short: "Generate OpenAPI YAML",
 			Run: func(cmd *cobra.Command, args []string) {
 				s := CLIServer(cmd, args)
-				s.RegisterAllTypedHandler()
+				s.RegisterAllFunction()
 				printOpenAPI(s)
 			},
 		})
@@ -178,7 +178,7 @@ func NewCLI(config *Config, extconfig ...map[string]any) *CLI {
 			Short: "Print registered routes",
 			Run: func(cmd *cobra.Command, args []string) {
 				s := CLIServer(cmd, args)
-				s.RegisterAllTypedHandler()
+				s.RegisterAllFunction()
 				printRoute(s)
 			},
 		})

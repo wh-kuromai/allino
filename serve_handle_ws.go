@@ -27,8 +27,8 @@ func (cfg *WebSocketConfig) ToFiberWebSocketConfig() websocket.Config {
 	}
 }
 
-type WebsocketRequestHandler func(r *Request) error
-type WebsocketConnHandler func(r *Request, conn *websocket.Conn)
+type WebsocketRequestHandler func(r *Runtime) error
+type WebsocketConnHandler func(r *Runtime, conn *websocket.Conn)
 
 func (s *Server) HandleWebsocket(pattern string, requestHandlerFunc WebsocketRequestHandler, connHandlerFunc WebsocketConnHandler, c ...websocket.Config) {
 	var cfg websocket.Config
@@ -70,7 +70,7 @@ func (s *Server) HandleWebsocket(pattern string, requestHandlerFunc WebsocketReq
 
 	s.Fiber.Use(pattern, websocket.New(func(c *websocket.Conn) {
 		defer c.Close()
-		req := c.Locals("allino").(*Request)
+		req := c.Locals("allino").(*Runtime)
 		connHandlerFunc(req, c)
 	}, cfg))
 }

@@ -9,7 +9,7 @@ import (
 )
 
 func (a *AllObjects) getNodeMetaCache(
-	r *allino.Request,
+	r *allino.Runtime,
 	nodes []Node,
 ) ([]*ResourceMetadataSet, error) {
 
@@ -33,7 +33,7 @@ func (a *AllObjects) getNodeMetaCache(
 }
 
 func (a *AllObjects) getParentMetaCached(
-	r *allino.Request,
+	r *allino.Runtime,
 	parentID uint64,
 ) (*ResourceMetadataSet, error) {
 
@@ -121,7 +121,7 @@ func (a *AllObjects) getParentMetaCached(
 }
 
 func (a *AllObjects) buildParentMeta(
-	r *allino.Request,
+	r *allino.Runtime,
 	parentID uint64,
 	key string,
 ) (*ResourceMetadataSet, error) {

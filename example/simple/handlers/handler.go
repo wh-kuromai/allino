@@ -15,8 +15,8 @@ type HealthcheckAPIOutput struct {
 	StartAt time.Time `json:"startAt"`
 }
 
-var HealthcheckAPITypedHandler = allino.NewTypedAPI("/api/healthcheck",
-	func(r *allino.Request, param HealthcheckAPIInput) (HealthcheckAPIOutput, error) {
+var HealthcheckAPIFunction = allino.NewTypedAPI("/api/healthcheck",
+	func(r *allino.Runtime, param HealthcheckAPIInput) (HealthcheckAPIOutput, error) {
 		// Actual API logic here.
 		return HealthcheckAPIOutput{
 			Status:  "OK",
@@ -25,8 +25,8 @@ var HealthcheckAPITypedHandler = allino.NewTypedAPI("/api/healthcheck",
 		}, nil
 	})
 
-var HealthcheckBothAPITypedHandler = allino.NewTypedAPI("/api/healthcheck_both",
-	func(r *allino.Request, param HealthcheckAPIInput) (*HealthcheckAPIOutput, error) {
+var HealthcheckBothAPIFunction = allino.NewTypedAPI("/api/healthcheck_both",
+	func(r *allino.Runtime, param HealthcheckAPIInput) (*HealthcheckAPIOutput, error) {
 		// Actual API logic here.
 		return &HealthcheckAPIOutput{
 			Status:  "OK",
@@ -35,8 +35,8 @@ var HealthcheckBothAPITypedHandler = allino.NewTypedAPI("/api/healthcheck_both",
 		}, nil
 	})
 
-var HealthcheckPointerAPITypedHandler = allino.NewTypedAPI("/api/healthcheck_pointer",
-	func(r *allino.Request, param *HealthcheckAPIInput) (*HealthcheckAPIOutput, error) {
+var HealthcheckPointerAPIFunction = allino.NewTypedAPI("/api/healthcheck_pointer",
+	func(r *allino.Runtime, param *HealthcheckAPIInput) (*HealthcheckAPIOutput, error) {
 		// Actual API logic here.
 		return &HealthcheckAPIOutput{
 			Status:  "OK",

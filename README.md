@@ -72,8 +72,8 @@ type HealthcheckAPIOutput struct {
 	StartAt time.Time `json:"startAt"`
 }
 
-var HealthcheckAPITypedHandler = allino.NewTypedAPI("/api/healthcheck",
-    func(r *allino.Request, param *HealthcheckAPIInput) (*HealthcheckAPIOutput, error) {
+var HealthcheckAPIFunction = allino.NewTypedAPI("/api/healthcheck",
+    func(r *allino.Runtime, param *HealthcheckAPIInput) (*HealthcheckAPIOutput, error) {
         // Actual API logic here.
 		return &HealthcheckAPIOutput{
 			Status:  "OK",
@@ -86,14 +86,14 @@ var HealthcheckAPITypedHandler = allino.NewTypedAPI("/api/healthcheck",
 It might look a little unfamiliar at first, but it’s built on top of a simple generic helper function:
 
 ```go
-func NewTypedAPI[T, U any, E error](path string, handlefunc func(r *Request, input T) (output U, err E)) TypedHandler
+func NewTypedAPI[T, U any, E error](path string, handlefunc func(r *Runtime, input T) (output U, err E)) Function
 ```
 
 You can use any Go types for input and output.
 The framework automatically parses path/query/form parameters into your struct, validates them using go-playground/validator
 , and passes the fully-populated struct into your handler.
 
-The allino.Request includes fiber.Ctx, a zap.Logger, and a redis.Client — everything you need to start building real-world logic right away.
+The allino.Runtime includes fiber.Ctx, a zap.Logger, and a redis.Client — everything you need to start building real-world logic right away.
 
 ---
 
@@ -177,7 +177,7 @@ You can paste the following after your API idea, and get working `allino` code i
 //     - Avoid using `any` as the return type in JSON APIs, as it prevents OpenAPI schema generation.
 //   HTML:
 //     - If returning string or []byte, it will be written directly to the response.
-//     - If returning any other object and HandlerOption.HTMLTemplate is set,
+//     - If returning any other object and Option.HTMLTemplate is set,
 //       the value will be passed to html/template as the template data and rendered.
 //     - If an unsupported type is returned without a template, it will be converted to `string` via `fmt.Sprint`.
 // Error:
@@ -188,26 +188,34 @@ You can paste the following after your API idea, and get working `allino` code i
 //     - If returning error, it redirects to a default error page.
 //     - If returning RedirectError, sends err.StatusCode and redirects to err.Location.
 package allino //github.com/wh-kuromai/allino
-func NewTypedHandler[T, U any, E error](options HandlerOption, handlefunc func(r *Request, input T) (output U, err E)) *GenericTypedHandler[T, U, E]
-type Request struct {}
-func (r *Request) Fiber() *fiber.Ctx // only avaiable via http request. (nil if virtual)
-func (r *Request) Logger() *zap.Logger // use this for logging, inited via config.
-func (r *Request) Redis() redis.UniversalClient // go-redis Client, inited via config.
-func (r *Request) SQL() *sql.DB // pre-Opened sql Client, inited via config.
-func (r *Request) S3() *s3.Client // AWS SDK v2 S3 client, inited via config. (MinIO/AWS)
-func (r *Request) HttpClient() *http.Client // inited shared http client.
+func NewFunction[T, U any, E error](options Option, handlefunc func(r *Runtime, input T) (output U, err E)) Function
+// Create AI function with specified model and prompt.
+// tools are used for FunctionCall feature for supported model.
+func NewAI[T, U any](option Option, model, prompt string, tools ...Function) Function
+type Function interface {
+  // Call executes the handler.
+  // This can be used inside another handler or from application code.
+  Call(r *Runtime, input any) (output any, err error)
+}
+type Runtime struct {}
+func (r *Runtime) Fiber() *fiber.Ctx // only avaiable via http request. (nil if virtual)
+func (r *Runtime) Logger() *zap.Logger // use this for logging, inited via config.
+func (r *Runtime) Redis() redis.UniversalClient // go-redis Client, inited via config.
+func (r *Runtime) SQL() *sql.DB // pre-Opened sql Client, inited via config.
+func (r *Runtime) S3() *s3.Client // AWS SDK v2 S3 client, inited via config. (MinIO/AWS)
+func (r *Runtime) HttpClient() *http.Client // inited shared http client.
 // User() checks and validates using Cookie, Authorization header, X-CSRF-Token header or `csrf_token` form data.
 // Returns uid (database key), display name, and sets writable=true only when a write-intent credential is presented 
 // (e.g., Authorization header or an explicit token in form/query/header) and CSRF validation succeeds. 
 // Otherwise the user is treated as read-only. 
-func (r *Request) User() (uid, displayname string, writable bool, err error)
+func (r *Runtime) User() (uid, displayname string, writable bool, err error)
 // RequestID() returns unique generated xid, X-Request-ID header if config.trustedproxy.trustXRequestID is true,
 // async/dispatch JobID, or fanout/replay/replayall redis stream MessageID.
-func (r *Request) RequestID() string
+func (r *Runtime) RequestID() string
 // SessionID() returns the session ID from the guest cookie.
 // If the cookie is missing, it generates a new ID and sets it via fiber.Ctx.
-func (r *Request) SessionID() string
-func (r *Request) Context() context.Context
+func (r *Runtime) SessionID() string
+func (r *Runtime) Context() context.Context
 // NewCodeError makes error returning specified http status code.
 func NewCodeError(statusCode int, code string, msg string) error
 // fmt.Errorf version of NewCodeError. (compatible with errors.Is/errors.As)
@@ -222,13 +230,13 @@ func NewStatusError(status int) error
 func NewRedirectError(status int, location string) error
 // IssueCSRFToken issues a short-lived token used to protect write operations from CSRF attacks.
 // by default, this token should be added to `csrf_token` query or form parameter.
-func IssueCSRFToken(r *Request, uid string) string
+func IssueCSRFToken(r *Runtime, uid string) string
 // IssueAccessToken issues a short-lived token used to API access.
 // Optional custom JWT claims can be provided; they can later be retrieved via struct fields tagged with `jwt:"key"`.
-func IssueAccessToken(r *Request, uid, displayname string, jwt_custom_claims ...map[string]any) string
+func IssueAccessToken(r *Runtime, uid, displayname string, jwt_custom_claims ...map[string]any) string
 // IssueLoginCookie issues a login cookie for user authentication.
-func IssueLoginCookie(r *Request, uid, displayname string, jwt_custom_claims ...map[string]any) *fiber.Cookie
-type HandlerOption struct {
+func IssueLoginCookie(r *Runtime, uid, displayname string, jwt_custom_claims ...map[string]any) *fiber.Cookie
+type Option struct {
 	Path string
 	Method string // "GET", "POST", etc.
 	SubMethod []string
@@ -240,10 +248,9 @@ type HandlerOption struct {
   ResponseStatusCode int // default is 200. Also used as the response code in the OpenAPI spec.
 	ErrorStatusCode    int // default is 400.
 	HTMLTemplate       string // html/template text
-	OnInit     func(s *Server, virtual *Request) error // Init code for this handler, use Request for DB or Logger.
-	OnShutdown func(s *Server, virtual *Request) error // Finalize code for this handler, use Request for DB or Logger.
+	OnInit     func(s *Server, virtual *Runtime) error // Init code for this handler, use Request for DB or Logger.
+	OnShutdown func(s *Server, virtual *Runtime) error // Finalize code for this handler, use Request for DB or Logger.
 
-  Internal bool // If true, this handler is not exposed as an HTTP endpoint.
   Name    string // Logical name of this handler. Required when using Job mode.
   Version string // Semantic version of the handler (e.g. "1.0.0"). Optional.
 
@@ -323,24 +330,20 @@ type SessionOption struct {
 
 // WithSession retrieves/create a typed session instance associated with the request, then call callback within sync.Mutex lock.
 // A session ID is automatically issued and managed via cookies.
-func WithSession[S any](r *Request, fn func(*S) error) error
+func WithSession[S any](r *Runtime, fn func(*S) error) error
 
-// Call executes the handler.
-// This can be used inside another handler or from application code.
-func (rw *GenericTypedHandler[T, U, E]) Call(r *Request, input T) (output U, err error)
-
-func (r *Request) MarkAbort() // aborts the current execution (prevent caching or storing result/error)
-func (r *Request) MarkRequeue() // aborts the execution, and schedules a retry with the same input after a short delay.
-func (r *Request) MarkRequeueAt(waitsec int) // aborts the execution, and schedules a retry with the same input after the specified seconds.
+func (r *Runtime) MarkAbort() // aborts the current execution (prevent caching or storing result/error)
+func (r *Runtime) MarkRequeue() // aborts the execution, and schedules a retry with the same input after a short delay.
+func (r *Runtime) MarkRequeueAt(waitsec int) // aborts the execution, and schedules a retry with the same input after the specified seconds.
 
 // Global, TTL-trimmed redis stream with in-memory TTL-rotated radix-tree and exact-match map revoke system
 // The in-memory radix tree and map are safely restored during server initialization.
 // A scope can be revoked either by exact string match or by prefix match using a trailing wildcard (e.g. "some:string:*").
 // TTLs for exact and prefix revocations can be configured via server config.
-func (r *Request) Revoke(scope string, reason string) 
-func (r *Request) IsRevoked(scope string, issuedAt time.Time) (revoked bool, reason string) 
+func (r *Runtime) Revoke(scope string, reason string) 
+func (r *Runtime) IsRevoked(scope string, issuedAt time.Time) (revoked bool, reason string) 
 
-func GetClassHandlers(class string) []TypedHandler
+func GetClassHandlers(class string) []Function
 
 // EXAMPLE
 import (
@@ -364,13 +367,13 @@ type SampleAPIInput struct {
 type SampleAPIOutput struct {
 	Echo    string    `json:"echo,omitempty"`
 }
-var SampleAPITypedHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var SampleAPIFunction = allino.NewFunction(
+	allino.Option{
 		Path:        "/api/:uid/userinfosample", // `fiber` style path-parameter allowed. if you don't need :uid, remove it.
 		Method:      "GET",
 		ContentType: "application/json", // JSON or HTML, content-type will be sent automatically.
 	},
-	func(r *allino.Request, param SampleAPIInput) (*SampleAPIOutput, error) { // Both value and pointer params work; prefer value for small input structs (fewer allocs/escapes), and prefer pointer for output (short returns `return nil, err`).
+	func(r *allino.Runtime, param SampleAPIInput) (*SampleAPIOutput, error) { // Both value and pointer params work; prefer value for small input structs (fewer allocs/escapes), and prefer pointer for output (short returns `return nil, err`).
 		return &SampleAPIOutput{
 			Echo:    param.Echo,
 		}, nil
@@ -413,7 +416,7 @@ func main() {
     allino.RunCLI(&allino.Config{
         OnInit: func(server *allino.Server) {
             
-            server.TypedHandleFunc(allino.HandlerOption{
+            server.TypedHandleFunc(allino.Option{
                 Path:        "/api/legacy",
                 Method:      "GET",
                 ContentType: allino.JSON,
@@ -437,21 +440,21 @@ This makes it easy to incrementally migrate your existing API server to allino, 
 ---
 ### 🧪 Want to generate even more perfect OpenAPI docs?
 
-Previously, we used `allino.NewTypedAPI`, but if you switch to `allino.NewTypedHandler`, you can configure various options like:
+Previously, we used `allino.NewTypedAPI`, but if you switch to `allino.NewFunction`, you can configure various options like:
 
 - Add `Summary` and `Description` to the OpenAPI docs
 - Enable CORS: Send `Access-Control-Allow-Origin: *` for OPTIONS requests
 - Disable JSON wrapping: Prevent output from being wrapped in `{"data":{...}}` or `{"error":{...}}`
 
 ```go
-var HealthcheckAPITypedHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var HealthcheckAPIFunction = allino.NewFunction(
+	allino.Option{
 		Summary:     "Simple health check API",
 		Path:        "/api/healthcheck",
 		Method:      "GET",
 		ContentType: allino.JSON,
 	},
-	func(r *allino.Request, param *HealthcheckAPIInput) (*HealthcheckAPIOutput, error) {
+	func(r *allino.Runtime, param *HealthcheckAPIInput) (*HealthcheckAPIOutput, error) {
 		return &HealthcheckAPIOutput{
 			Status:  "OK",
 			Echo:    param.Echo,

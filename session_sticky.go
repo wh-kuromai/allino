@@ -41,7 +41,7 @@ type stickySessionEntry struct {
 	mu        sync.Mutex
 }
 
-func getStickySessionEntry[S any](r *Request) (*stickySessionEntry, error) {
+func getStickySessionEntry[S any](r *Runtime) (*stickySessionEntry, error) {
 	sid := r.SessionID(true)
 
 	now := time.Now()
@@ -79,7 +79,7 @@ func getStickySessionEntry[S any](r *Request) (*stickySessionEntry, error) {
 	return nil, NewError("session not exist")
 }
 
-func (rw *GenericTypedHandler[T, U, E]) call_sticky(r *Request, input T) (output U, err error) {
+func (rw *GenericFunction[T, U, E]) call_sticky(r *Runtime, input T) (output U, err error) {
 
 	var zeroU U
 	sessionName := rw.options.Session.Name
@@ -293,7 +293,7 @@ type sessionToken struct {
 	CreateAt  int64  `json:"c,omitempty"`
 }
 
-func encodeSession(r *Request, data sessionToken) (string, error) {
+func encodeSession(r *Runtime, data sessionToken) (string, error) {
 	buf, err := json.Marshal(data)
 	if err != nil {
 		return "", err
@@ -310,7 +310,7 @@ func encodeSession(r *Request, data sessionToken) (string, error) {
 
 var ErrSessionExpired = NewError("session expired")
 
-func decodeSession(r *Request, token string) (*sessionToken, error) {
+func decodeSession(r *Runtime, token string) (*sessionToken, error) {
 	key := sha256.Sum256([]byte(r.config.Session.Secret))
 	ebuf, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {

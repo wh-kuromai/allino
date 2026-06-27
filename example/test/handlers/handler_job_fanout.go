@@ -15,15 +15,15 @@ type FanoutInput struct {
 type FanoutOutput struct {
 }
 
-var FanoutHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var FanoutHandler = allino.NewFunction(
+	allino.Option{
 		Path:        "/api/fanouttest",
 		ContentType: allino.JSON,
 		Name:        "fanout-test-handler",
 		Version:     "1.0.0",
 		JobMode:     "fanout",
 	},
-	func(r *allino.Request, param *FanoutInput) (*FanoutOutput, error) {
+	func(r *allino.Runtime, param *FanoutInput) (*FanoutOutput, error) {
 		atomic.AddInt32(&FanoutExecutionCount, 1)
 		r.Logger().Info("/api/fanouttest")
 		return nil, nil
@@ -32,15 +32,15 @@ var FanoutHandler = allino.NewTypedHandler(
 
 var ReplayExecutionCount int32
 
-var ReplayHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var ReplayHandler = allino.NewFunction(
+	allino.Option{
 		Path:        "/api/replaytest",
 		ContentType: allino.JSON,
 		Name:        "replay-test-handler",
 		Version:     "1.0.0",
 		JobMode:     "replay",
 	},
-	func(r *allino.Request, param *FanoutInput) (*FanoutOutput, error) {
+	func(r *allino.Runtime, param *FanoutInput) (*FanoutOutput, error) {
 		atomic.AddInt32(&ReplayExecutionCount, 1)
 		return nil, nil
 	},
@@ -48,15 +48,15 @@ var ReplayHandler = allino.NewTypedHandler(
 
 var ReplayAllExecutionCount int32
 
-var ReplayAllHandler = allino.NewTypedHandler(
-	allino.HandlerOption{
+var ReplayAllHandler = allino.NewFunction(
+	allino.Option{
 		Path:        "/api/replayalltest",
 		ContentType: allino.JSON,
 		Name:        "replayall-test-handler",
 		Version:     "1.0.0",
 		JobMode:     "replayall",
 	},
-	func(r *allino.Request, param *FanoutInput) (*FanoutOutput, error) {
+	func(r *allino.Runtime, param *FanoutInput) (*FanoutOutput, error) {
 		atomic.AddInt32(&ReplayAllExecutionCount, 1)
 		return nil, nil
 	},

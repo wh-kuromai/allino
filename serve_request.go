@@ -29,10 +29,10 @@ var (
 	ErrNotStruct     = errors.New("get need pointer for struct")
 )
 
-type RequestType int
+type Origin int
 
 const (
-	REQUEST_VIRTUAL RequestType = iota
+	REQUEST_VIRTUAL Origin = iota
 	REQUEST_HTTP
 	REQUEST_WS
 	REQUEST_CRON
@@ -43,11 +43,11 @@ const (
 
 var requestTypeStr = []string{"virtual", "http", "ws", "cron", "job", "cli", "stream"}
 
-func (r RequestType) String() string {
+func (r Origin) String() string {
 	return requestTypeStr[int(r)]
 }
 
-type Request struct {
+type Runtime struct {
 	config     *Config
 	fiber      *fiber.Ctx
 	logger     *zap.Logger
@@ -67,7 +67,7 @@ type requestMemo struct {
 }
 
 type requestCache struct {
-	req_type  RequestType
+	req_type  Origin
 	requestid string
 	clientip  string
 	//endpoint  string
@@ -102,8 +102,8 @@ type requestCache struct {
 	deferfn []func() error
 }
 
-func NewRequest(s *Server, w *fiber.Ctx) *Request {
-	req := &Request{
+func NewRequest(s *Server, w *fiber.Ctx) *Runtime {
+	req := &Runtime{
 		config: s.Config,
 		fiber:  w,
 		logger: s.Logger,
@@ -122,49 +122,49 @@ func NewRequest(s *Server, w *fiber.Ctx) *Request {
 	return req
 }
 
-func (r *Request) Config() *Config {
+func (r *Runtime) Config() *Config {
 	return r.config
 }
 
-func (r *Request) Fiber() *fiber.Ctx {
+func (r *Runtime) Fiber() *fiber.Ctx {
 	return r.fiber
 }
 
-func (r *Request) Server() *Server {
+func (r *Runtime) Server() *Server {
 	return r.server
 }
 
-func (r *Request) Redis() redis.UniversalClient {
+func (r *Runtime) Redis() redis.UniversalClient {
 	return r.redis
 }
 
-func (r *Request) SQL() *sql.DB {
+func (r *Runtime) SQL() *sql.DB {
 	return r.sql
 }
 
-func (r *Request) S3() *s3.Client {
+func (r *Runtime) S3() *s3.Client {
 	return r.server.S3
 }
 
-func (r *Request) ChatGPT() *openai.Client {
+func (r *Runtime) ChatGPT() *openai.Client {
 	return r.server.ChatGPT
 }
 
-func (r *Request) AI(model ...string) AI {
+func (r *Runtime) AI(model ...string) AI {
 	return r.config.AI.Select(model...)
 }
 
-func (r *Request) HttpClient() *http.Client {
+func (r *Runtime) HttpClient() *http.Client {
 	return r.server.HttpClient
 }
 
-func (r *Request) do_defer() {
+func (r *Runtime) do_defer() {
 	for _, fn := range r.cache.deferfn {
 		fn()
 	}
 }
 
-func (r *Request) Logger() *zap.Logger {
+func (r *Runtime) Logger() *zap.Logger {
 	if r.loggerWith != nil {
 		return r.loggerWith
 	}
@@ -177,14 +177,14 @@ func (r *Request) Logger() *zap.Logger {
 	return r.loggerWith
 }
 
-func (r *Request) Defer(fn func() error) {
+func (r *Runtime) Defer(fn func() error) {
 	if r.cache.deferfn == nil {
 		r.cache.deferfn = make([]func() error, 0, 5)
 	}
 	r.cache.deferfn = append(r.cache.deferfn, fn)
 }
 
-func (r *Request) RequestID() string {
+func (r *Runtime) RequestID() string {
 	if r.cache.requestid != "" {
 		return r.cache.requestid
 	}
@@ -202,7 +202,7 @@ func (r *Request) RequestID() string {
 	return r.cache.requestid
 }
 
-func (r *Request) ClientIP() string {
+func (r *Runtime) ClientIP() string {
 	if r.cache.clientip != "" {
 		return r.cache.clientip
 	}
@@ -239,7 +239,7 @@ func cachedRegex(rx string) (*regexp.Regexp, error) {
 	return re, nil
 }
 
-func (r *Request) Context() context.Context {
+func (r *Runtime) Context() context.Context {
 	if r.fiber != nil {
 		return r.fiber.UserContext()
 	}
@@ -250,7 +250,7 @@ func (r *Request) Context() context.Context {
 	return r.server.appctx
 }
 
-func (r *Request) jwtdecodedbytag(jwtbody []byte) (map[string]json.RawMessage, error) {
+func (r *Runtime) jwtdecodedbytag(jwtbody []byte) (map[string]json.RawMessage, error) {
 	if r.cache.jwtdecodedbytag == nil {
 		var out map[string]json.RawMessage
 		err := json.Unmarshal(jwtbody, &out)
@@ -262,7 +262,7 @@ func (r *Request) jwtdecodedbytag(jwtbody []byte) (map[string]json.RawMessage, e
 	return r.cache.jwtdecodedbytag, nil
 }
 
-func (r *Request) jwtdecodedbyclaims(jwtbody []byte) (map[string]string, error) {
+func (r *Runtime) jwtdecodedbyclaims(jwtbody []byte) (map[string]string, error) {
 	if r.cache.jwtdecodedbyclaims == nil {
 
 		dec := json.NewDecoder(bytes.NewReader(jwtbody))
@@ -289,14 +289,14 @@ func (r *Request) jwtdecodedbyclaims(jwtbody []byte) (map[string]string, error) 
 	return r.cache.jwtdecodedbyclaims, nil
 }
 
-func (r *Request) bodyBytes() []byte {
+func (r *Runtime) bodyBytes() []byte {
 	if r.cache.body == nil {
 		r.cache.body = r.fiber.Body() // Fiber側のバッファ参照（必要ならcopy）
 	}
 	return r.cache.body
 }
 
-func (r *Request) getByStructField(rpf *fieldPlan, fieldVal reflect.Value) (string, bool, error) {
+func (r *Runtime) getByStructField(rpf *fieldPlan, fieldVal reflect.Value) (string, bool, error) {
 	//qx, ok := field.Tag.Lookup("path")
 	qx := rpf.tags[tagPath]
 	ok := rpf.tagoks[tagPath]
@@ -454,7 +454,7 @@ var (
 	tTime          = reflect.TypeOf((*time.Time)(nil)).Elem()     // time.Time
 )
 
-func (r *Request) getAll(params interface{}, rp *reflectPlan) error {
+func (r *Runtime) getAll(params interface{}, rp *reflectPlan) error {
 	if params == nil {
 		return ErrNotStruct
 	}

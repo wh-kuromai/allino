@@ -113,9 +113,9 @@ type Server struct {
 	extensions []extendable
 	extopts    []*ExtOption
 
-	typedHandlerCache    []TypedHandler
-	internalHandlerCache []TypedHandler
-	optionsCache         []*HandlerOption
+	FunctionCache        []Function
+	internalHandlerCache []Function
+	optionsCache         []*Option
 
 	appctx      context.Context
 	appcancel   context.CancelFunc
@@ -123,7 +123,7 @@ type Server struct {
 	forcecancel context.CancelFunc
 	//runAsPlugin bool
 
-	handlerOptMap     map[string]*HandlerOption
+	handlerOptMap     map[string]*Option
 	session           *sessionManager
 	jobManager        *jobManager
 	callSQLStrategy   *callSQLStrategy
@@ -143,7 +143,7 @@ func NewServer(config *Config, extconfig ...map[string]any) (*Server, error) {
 		//Router: httprouter.New(),
 		Cron:          cron.New(),
 		Validator:     validator.New(),
-		handlerOptMap: map[string]*HandlerOption{},
+		handlerOptMap: map[string]*Option{},
 	}
 
 	ctxb := context.Background()
@@ -324,12 +324,12 @@ func NewServer(config *Config, extconfig ...map[string]any) (*Server, error) {
 		}
 	}
 
-	for _, th := range s.typedHandlerCache {
+	for _, th := range s.FunctionCache {
 		opt := th.Options()
 		if opt.OnInit != nil {
 			err = opt.OnInit(s, NewRequest(s, nil))
 			if err != nil {
-				return nil, fmt.Errorf("OnInit error for TypedHandler %s: %w", opt.Path, err)
+				return nil, fmt.Errorf("OnInit error for Function %s: %w", opt.Path, err)
 			}
 		}
 	}
@@ -350,7 +350,7 @@ func NewTestServer(config *Config, extconfig ...map[string]any) *Server {
 	if err != nil {
 		panic(fmt.Sprintf("NewTestServer error: %s", err))
 	}
-	s.RegisterAllTypedHandler()
+	s.RegisterAllFunction()
 	s.serveInitOnly()
 	return s
 }
@@ -545,7 +545,7 @@ WARNING: debug=true
 		for _, ext := range s.extopts {
 			s.Logger.Info("extension init", zap.String("name", ext.Name))
 			if ext.OnHandlerInit != nil {
-				opts := s.RegisteredTypedHandlers()
+				opts := s.RegisteredFunctions()
 				for _, opt := range opts {
 					err = ext.OnHandlerInit(s, NewRequest(s, nil), opt)
 					if err != nil {
@@ -636,12 +636,12 @@ WARNING: debug=true
 		s.errorPrintln("Shutdown error: ", err)
 	}
 
-	for _, th := range s.typedHandlerCache {
+	for _, th := range s.FunctionCache {
 		opt := th.Options()
 		if opt.OnShutdown != nil {
 			err = opt.OnShutdown(s, NewRequest(s, nil))
 			if err != nil {
-				s.errorPrintln(fmt.Sprintf("OnShutdown error for TypedHandler `%s`: ", opt.Path), err)
+				s.errorPrintln(fmt.Sprintf("OnShutdown error for Function `%s`: ", opt.Path), err)
 			}
 		}
 	}
@@ -670,7 +670,7 @@ WARNING: debug=true
 
 func (s *Server) serveInitOnly() {
 	if !s.Config.Log.Silent {
-		opts := s.RegisteredTypedHandlers()
+		opts := s.RegisteredFunctions()
 		for _, opt := range opts {
 			s.Logger.Info("handler init", zap.String("path", opt.Path))
 		}
@@ -684,7 +684,7 @@ func (s *Server) serveInitOnly() {
 	for _, ext := range s.extopts {
 		s.Logger.Info("extension init", zap.String("name", ext.Name))
 		if ext.OnHandlerInit != nil {
-			opts := s.RegisteredTypedHandlers()
+			opts := s.RegisteredFunctions()
 			for _, opt := range opts {
 				err := ext.OnHandlerInit(s, NewRequest(s, nil), opt)
 				if err != nil {

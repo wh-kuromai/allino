@@ -15,11 +15,11 @@ import (
 	"go.uber.org/zap"
 )
 
-type TypedHandler interface {
-	Options() *HandlerOption
-	Copy() TypedHandler
-	HandleRequest(r *Request)
-	Handlefunc(r *Request, input any) (output any, err error)
+type Function interface {
+	Options() *Option
+	Copy() Function
+	HandleRequest(r *Runtime)
+	Handlefunc(r *Runtime, input any) (output any, err error)
 
 	InputSchema() (*jsonino.Schema, error)
 	OutputSchema() (*jsonino.Schema, error)
@@ -30,11 +30,11 @@ type TypedHandler interface {
 	UnmarshalError(buf []byte) (error error, err error)
 }
 
-var typedHandlerList []TypedHandler
+var FunctionList []Function
 
 type idxhandler struct {
 	i int
-	h TypedHandler
+	h Function
 }
 
 // パスの優先度を判定するロジック
@@ -70,9 +70,9 @@ func getPriority(segment string) int {
 	return 0 // 静的パス
 }
 
-func (s *Server) RegisterAllTypedHandler() {
-	list := make([]*idxhandler, len(typedHandlerList))
-	for i, h := range typedHandlerList {
+func (s *Server) RegisterAllFunction() {
+	list := make([]*idxhandler, len(FunctionList))
+	for i, h := range FunctionList {
 		list[i] = &idxhandler{i, h}
 	}
 
@@ -87,7 +87,7 @@ func (s *Server) RegisterAllTypedHandler() {
 
 var ErrServerError = NewCodeError(500, "server_error", "server error")
 
-func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r *Request, input T) (output U, err E)) *GenericTypedHandler[T, U, E] {
+func NewFunction[T, U any, E error](option Option, handlefunc func(r *Runtime, input T) (output U, err E)) *GenericFunction[T, U, E] {
 	options := &option
 	if options.Package == "" {
 		options.Package, _ = findExternalCaller([]string{"github.com/wh-kuromai/allino"})
@@ -167,13 +167,13 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 	//var contentTypeHandlerJSON = contentTypeHandlerMap[JSON]
 	var contentTypeHandlerHTML = contentTypeHandlerMap[HTML]
 
-	var rw *GenericTypedHandler[T, U, E]
-	rw = &GenericTypedHandler[T, U, E]{
+	var rw *GenericFunction[T, U, E]
+	rw = &GenericFunction[T, U, E]{
 		options: options,
 		tpool:   tpool,
 		upool:   upool,
 		epool:   epool,
-		handlefunc: func(r *Request, input T) (output U, err error) {
+		handlefunc: func(r *Runtime, input T) (output U, err error) {
 			defer func() {
 				// recover needed.
 				if rcv := recover(); rcv != nil {
@@ -185,7 +185,7 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 			}()
 			return handlefunc(r, input)
 		},
-		handler: func(r *Request) {
+		handler: func(r *Runtime) {
 			if options.ContentType != "" {
 				r.fiber.Set("Content-Type", options.ContentType)
 			}
@@ -292,7 +292,7 @@ func NewTypedHandler[T, U any, E error](option HandlerOption, handlefunc func(r 
 	options.hasSelfDiscovery = hasSelfDiscovery(reflect.TypeOf(t).Elem())
 	options.consumer = rw.job_consume
 
-	typedHandlerList = append(typedHandlerList, rw)
+	FunctionList = append(FunctionList, rw)
 	return rw
 }
 
@@ -304,10 +304,10 @@ func IsAny[T any]() bool {
 	return tType == anyType
 }
 
-type GenericTypedHandler[T, U any, E error] struct {
-	options    *HandlerOption
-	handlefunc func(r *Request, input T) (output U, err error)
-	handler    func(r *Request)
+type GenericFunction[T, U any, E error] struct {
+	options    *Option
+	handlefunc func(r *Runtime, input T) (output U, err error)
+	handler    func(r *Runtime)
 
 	tpool *ReflectPool[T]
 	upool *ReflectPool[U]
@@ -317,23 +317,23 @@ type GenericTypedHandler[T, U any, E error] struct {
 	Handler string `json:"handler"`
 }
 
-func (rw *GenericTypedHandler[T, U, E]) Options() *HandlerOption {
+func (rw *GenericFunction[T, U, E]) Options() *Option {
 	return rw.options
 }
 
-func (rw *GenericTypedHandler[T, U, E]) UnmarshalInput(buf []byte) (input any, err error) {
+func (rw *GenericFunction[T, U, E]) UnmarshalInput(buf []byte) (input any, err error) {
 	return rw.tpool.AcquireUnmarshalJSON(buf)
 }
 
-func (rw *GenericTypedHandler[T, U, E]) UnmarshalOutput(buf []byte) (output any, err error) {
+func (rw *GenericFunction[T, U, E]) UnmarshalOutput(buf []byte) (output any, err error) {
 	return rw.upool.AcquireUnmarshalJSON(buf)
 }
 
-func (rw *GenericTypedHandler[T, U, E]) UnmarshalError(buf []byte) (outerr error, err error) {
+func (rw *GenericFunction[T, U, E]) UnmarshalError(buf []byte) (outerr error, err error) {
 	return rw.epool.AcquireUnmarshalJSON(buf)
 }
 
-func (rw *GenericTypedHandler[T, U, E]) InputSchema() (*jsonino.Schema, error) {
+func (rw *GenericFunction[T, U, E]) InputSchema() (*jsonino.Schema, error) {
 	if rw.options.inputType == nil {
 		return nil, errors.New("no inputType")
 	}
@@ -341,7 +341,7 @@ func (rw *GenericTypedHandler[T, U, E]) InputSchema() (*jsonino.Schema, error) {
 	return jsonino.SchemaFrom(rw.options.inputType)
 }
 
-func (rw *GenericTypedHandler[T, U, E]) OutputSchema() (*jsonino.Schema, error) {
+func (rw *GenericFunction[T, U, E]) OutputSchema() (*jsonino.Schema, error) {
 	if rw.options.outputType == nil {
 		return nil, errors.New("no outputType")
 	}
@@ -349,7 +349,7 @@ func (rw *GenericTypedHandler[T, U, E]) OutputSchema() (*jsonino.Schema, error) 
 	return jsonino.SchemaFrom(rw.options.outputType)
 }
 
-func (rw *GenericTypedHandler[T, U, E]) ErrorSchema() (*jsonino.Schema, error) {
+func (rw *GenericFunction[T, U, E]) ErrorSchema() (*jsonino.Schema, error) {
 	if rw.options.errorType == nil {
 		return nil, errors.New("no errorType")
 	}
@@ -357,16 +357,16 @@ func (rw *GenericTypedHandler[T, U, E]) ErrorSchema() (*jsonino.Schema, error) {
 	return jsonino.SchemaFrom(rw.options.errorType)
 }
 
-func (rw *GenericTypedHandler[T, U, E]) Copy() TypedHandler {
+func (rw *GenericFunction[T, U, E]) Copy() Function {
 	opt := *rw.options
-	return &GenericTypedHandler[T, U, E]{
+	return &GenericFunction[T, U, E]{
 		options:    &opt,
 		handlefunc: rw.handlefunc,
 		handler:    rw.handler,
 	}
 }
 
-func (rw *GenericTypedHandler[T, U, E]) Call(r *Request, input T) (output U, err error) {
+func (rw *GenericFunction[T, U, E]) Call(r *Runtime, input T) (output U, err error) {
 	newR := *r // shallow copy (rは構造体)
 	newR.memo = requestMemo{}
 	//opt := rw.options
@@ -385,7 +385,7 @@ func (rw *GenericTypedHandler[T, U, E]) Call(r *Request, input T) (output U, err
 	return
 }
 
-func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromcall bool) (output U, err error) {
+func (rw *GenericFunction[T, U, E]) call_internal(r *Runtime, input T, fromcall bool) (output U, err error) {
 	//var zeroU U
 	if rw.options.Session.Type != "" {
 		return rw.call_session(r, input, fromcall)
@@ -420,7 +420,7 @@ func (rw *GenericTypedHandler[T, U, E]) call_internal(r *Request, input T, fromc
 	return rw.handlefunc(r, input)
 }
 
-func (rw *GenericTypedHandler[T, U, E]) NewInputWithDefault() T {
+func (rw *GenericFunction[T, U, E]) NewInputWithDefault() T {
 	t, err := rw.tpool.New(func(a any) error {
 		return setDefault(a)
 	})
@@ -434,11 +434,11 @@ func (rw *GenericTypedHandler[T, U, E]) NewInputWithDefault() T {
 	return t
 }
 
-func (rw *GenericTypedHandler[T, U, E]) HandleRequest(r *Request) {
+func (rw *GenericFunction[T, U, E]) HandleRequest(r *Runtime) {
 	rw.handler(r)
 }
 
-func (rw *GenericTypedHandler[T, U, E]) Handlefunc(r *Request, input any) (output any, err error) {
+func (rw *GenericFunction[T, U, E]) Handlefunc(r *Runtime, input any) (output any, err error) {
 	var inT T
 	inT, _ = input.(T)
 	return rw.handlefunc(r, inT)
@@ -447,22 +447,22 @@ func (rw *GenericTypedHandler[T, U, E]) Handlefunc(r *Request, input any) (outpu
 var contentTypeHandlerMap map[string]*contentTypeHandler
 
 type contentTypeHandler struct {
-	responseHandler func(r *Request, options *HandlerOption, output any)
-	errorHandler    func(r *Request, options *HandlerOption, err error)
+	responseHandler func(r *Runtime, options *Option, output any)
+	errorHandler    func(r *Runtime, options *Option, err error)
 }
 
-func (c *contentTypeHandler) ResponseHandler(r *Request, options *HandlerOption, output any) {
+func (c *contentTypeHandler) ResponseHandler(r *Runtime, options *Option, output any) {
 	c.responseHandler(r, options, output)
 }
 
-func (c *contentTypeHandler) ErrorHandler(r *Request, options *HandlerOption, err error) {
+func (c *contentTypeHandler) ErrorHandler(r *Runtime, options *Option, err error) {
 	c.errorHandler(r, options, err)
 }
 
 func init() {
 	contentTypeHandlerMap = make(map[string]*contentTypeHandler)
 	contentTypeHandlerMap[HTML] = &contentTypeHandler{
-		responseHandler: func(r *Request, options *HandlerOption, output any) {
+		responseHandler: func(r *Runtime, options *Option, output any) {
 			r.fiber.Status(options.ResponseStatusCode)
 			switch v := output.(type) {
 			case []byte:
@@ -494,7 +494,7 @@ func init() {
 			}
 
 		},
-		errorHandler: func(r *Request, options *HandlerOption, err error) {
+		errorHandler: func(r *Runtime, options *Option, err error) {
 			if redir, ok := err.(FiberHandler); ok {
 				redir.HandleFiber(r.fiber)
 				return
@@ -504,7 +504,7 @@ func init() {
 	}
 
 	contentTypeHandlerMap[JSON] = &contentTypeHandler{
-		responseHandler: func(r *Request, options *HandlerOption, output any) {
+		responseHandler: func(r *Runtime, options *Option, output any) {
 			if !options.NoWrapJSON {
 				output = &APIResponse[any]{output}
 			}
@@ -517,7 +517,7 @@ func init() {
 			r.fiber.Status(options.ResponseStatusCode)
 			r.fiber.Write(buf)
 		},
-		errorHandler: func(r *Request, options *HandlerOption, err error) {
+		errorHandler: func(r *Runtime, options *Option, err error) {
 			if redir, ok := err.(FiberHandler); ok {
 				redir.HandleFiber(r.fiber)
 				return

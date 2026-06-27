@@ -48,7 +48,7 @@ type UserData struct {
 ```go
 var RegisterAPI = allino.NewTypedAPI[*RegisterInput, *AuthOutput, error](
 	"/api/register",
-	func(r *allino.Request, input *RegisterInput) (*AuthOutput, error) {
+	func(r *allino.Runtime, input *RegisterInput) (*AuthOutput, error) {
 		uid := input.ID
 		key := "user:" + uid
 
@@ -87,7 +87,7 @@ var RegisterAPI = allino.NewTypedAPI[*RegisterInput, *AuthOutput, error](
 ```go
 var LoginAPI = allino.NewTypedAPI[*LoginInput, *AuthOutput, error](
 	"/api/login",
-	func(r *allino.Request, input *LoginInput) (*AuthOutput, error) {
+	func(r *allino.Runtime, input *LoginInput) (*AuthOutput, error) {
 		uid := input.ID
 		key := "user:" + uid
 
@@ -124,7 +124,7 @@ var LoginAPI = allino.NewTypedAPI[*LoginInput, *AuthOutput, error](
 To protect `POST` routes (like `/register` or `/login`) from CSRF:
 
 ```go
-&allino.HandlerOption{
+&allino.Option{
 	Path:        "/api/register",
 	Method:      "POST",
 	ContentType: "application/json",

@@ -23,16 +23,16 @@ const (
 	JOB_ABORT            = "abort"
 )
 
-func (r *Request) MarkRequeue() {
+func (r *Runtime) MarkRequeue() {
 	r.memo.jobabortctrl = JOB_ABORT_REQUEUE
 }
 
-func (r *Request) MarkRequeueAt(waitsec int) {
+func (r *Runtime) MarkRequeueAt(waitsec int) {
 	r.memo.jobabortctrl = JOB_ABORT_REQUEUE_AT
 	r.memo.jobrequeuewait = waitsec
 }
 
-func (r *Request) MarkAbort() {
+func (r *Runtime) MarkAbort() {
 	r.memo.jobabortctrl = JOB_ABORT
 }
 
@@ -68,7 +68,7 @@ const (
 	jobIDSep     = ":"
 )
 
-func requeueDelay(r *Request) int {
+func requeueDelay(r *Runtime) int {
 	switch r.memo.jobabortctrl {
 	case JOB_ABORT_REQUEUE:
 		return int(r.Config().JobConfig.RequeueInterval.Seconds())
@@ -78,7 +78,7 @@ func requeueDelay(r *Request) int {
 	return int(r.Config().JobConfig.RequeueInterval.Seconds())
 }
 
-func handlerVersion(opt *HandlerOption) string {
+func handlerVersion(opt *Option) string {
 	v := opt.Version
 	if opt.Version == "" {
 		v = "0.0.1"
@@ -94,7 +94,7 @@ func getIdempotentKey(input any) string {
 	return ""
 }
 
-func encodeHandlerName(opt *HandlerOption) string {
+func encodeHandlerName(opt *Option) string {
 	return opt.Name //+ "@" + handlerVersion(opt)
 }
 

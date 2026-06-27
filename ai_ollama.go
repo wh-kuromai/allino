@@ -15,7 +15,7 @@ type Ollama struct {
 }
 
 func init() {
-	RegisterAI("ollama", func(config *AIConfig, model string) AI {
+	RegisterAIProvider("ollama", func(config *AIConfig, model string) AI {
 		return &Ollama{
 			config: config,
 			model:  model,
@@ -57,7 +57,7 @@ type ollamaToolCall struct {
 	} `json:"function"`
 }
 
-func buildTools(tools []TypedHandler) ([]ollamaTool, error) {
+func buildTools(tools []Function) ([]ollamaTool, error) {
 	var result []ollamaTool
 
 	for _, tool := range tools {
@@ -91,10 +91,10 @@ func buildTools(tools []TypedHandler) ([]ollamaTool, error) {
 }
 
 func (o *Ollama) Inference(
-	r *Request,
+	r *Runtime,
 	messages []map[string]any,
-	caller TypedHandler,
-	tools []TypedHandler,
+	caller Function,
+	tools []Function,
 ) (string, error) {
 
 	toolDefs, err := buildTools(tools)

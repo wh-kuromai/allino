@@ -18,17 +18,17 @@ func (s *Server) HandleFiber(method, pattern string, handlefunc fiber.Handler) {
 }
 
 type RequestHandler interface {
-	HandleRequest(r *Request)
+	HandleRequest(r *Runtime)
 }
 
-type RequestHandlerFunc func(r *Request)
+type RequestHandlerFunc func(r *Runtime)
 
 const (
 	HTML = "text/html"
 	JSON = "application/json"
 )
 
-func (s *Server) HandleRequestFunc(method, pattern string, handlerfunc func(*Request)) {
+func (s *Server) HandleRequestFunc(method, pattern string, handlerfunc func(*Runtime)) {
 	s.Fiber.Add(method, pattern, func(w *fiber.Ctx) error {
 		req := NewRequest(s, w)
 		defer req.do_defer()
@@ -38,10 +38,10 @@ func (s *Server) HandleRequestFunc(method, pattern string, handlerfunc func(*Req
 	})
 }
 
-//func (s *Server) TypedHandle(th TypedHandler) {
+//func (s *Server) TypedHandle(th Function) {
 //	s.TypedRouter.TypedHandle(th)
 //}
 
-//func (s *Server) TypedHandleFiber(options HandlerOption, h fiber.Handler) {
+//func (s *Server) TypedHandleFiber(options Option, h fiber.Handler) {
 //	s.TypedRouter.TypedHandleFiber(options, h)
 //}

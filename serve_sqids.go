@@ -20,7 +20,7 @@ func (c *SqidsConfig) setup() (*Sqids, error) {
 	return &Sqids{sq}, nil
 }
 
-func (r *Request) Sqids() *Sqids {
+func (r *Runtime) Sqids() *Sqids {
 	return r.server.Sqids
 }
 

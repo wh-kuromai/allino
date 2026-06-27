@@ -11,7 +11,7 @@ type redisSession struct {
 	deferfn  func() error
 }
 
-func getRedisSession(r *Request, sid string) (*redisSession, error) {
+func getRedisSession(r *Runtime, sid string) (*redisSession, error) {
 	if r.cache.sessionredis != nil {
 		return r.cache.sessionredis, nil
 	}
@@ -60,7 +60,7 @@ func getRedisSession(r *Request, sid string) (*redisSession, error) {
 	return sess, nil
 }
 
-func GetRedisSessionEntry[S any](r *Request, sid, name string) (*S, bool, error) {
+func GetRedisSessionEntry[S any](r *Runtime, sid, name string) (*S, bool, error) {
 	sess, err := getRedisSession(r, sid)
 	if err != nil {
 		return nil, false, err

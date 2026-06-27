@@ -9,7 +9,7 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-type HandlerOption struct {
+type Option struct {
 	// HTTP
 	Path               string
 	Method             string
@@ -17,10 +17,10 @@ type HandlerOption struct {
 	ContentType        string
 	CORS               bool
 	CORSCustomHeader   map[string]string
-	RequestHandler     func(r *Request, input any) (consumed bool, err error)
-	ResponseHandler    func(r *Request, output any) (consumed bool)
+	RequestHandler     func(r *Runtime, input any) (consumed bool, err error)
+	ResponseHandler    func(r *Runtime, output any) (consumed bool)
 	ResponseStatusCode int
-	ErrorHandler       func(r *Request, err error) (consumed bool)
+	ErrorHandler       func(r *Runtime, err error) (consumed bool)
 	ErrorStatusCode    int
 	RedirectStatusCode int
 	NoWrapJSON         bool
@@ -45,7 +45,7 @@ type HandlerOption struct {
 	AutoAuditMsg string
 
 	// Semantics
-	Internal    bool
+	// Internal    bool
 	Summary     string
 	Description string
 	Class       string
@@ -56,8 +56,8 @@ type HandlerOption struct {
 	ErrorTypeHint  any
 
 	// Events
-	OnInit     func(s *Server, r *Request) error
-	OnShutdown func(s *Server, r *Request) error
+	OnInit     func(s *Server, r *Runtime) error
+	OnShutdown func(s *Server, r *Runtime) error
 
 	// cache
 	parsedTemplate *template.Template
@@ -75,15 +75,15 @@ type HandlerOption struct {
 	cronid  cron.EntryID
 }
 
-func (h HandlerOption) InputType() reflect.Type {
+func (h Option) InputType() reflect.Type {
 	return h.inputType
 }
 
-func (h HandlerOption) OutputType() reflect.Type {
+func (h Option) OutputType() reflect.Type {
 	return h.outputType
 }
 
-func (h HandlerOption) ErrorType() reflect.Type {
+func (h Option) ErrorType() reflect.Type {
 	return h.errorType
 }
 
@@ -93,7 +93,7 @@ type handlerExtEntry struct {
 }
 
 // 追加オプション
-func (h HandlerOption) WithExt(v any) HandlerOption {
+func (h Option) WithExt(v any) Option {
 	if h.exts == nil {
 		h.exts = &sync.Map{}
 	}
@@ -108,9 +108,9 @@ func (h HandlerOption) WithExt(v any) HandlerOption {
 	return h
 }
 
-func NewTypedAPI[T, U any, E error](path string, handler func(*Request, T) (U, E)) *GenericTypedHandler[T, U, E] {
-	return NewTypedHandler(
-		HandlerOption{
+func NewTypedAPI[T, U any, E error](path string, handler func(*Runtime, T) (U, E)) *GenericFunction[T, U, E] {
+	return NewFunction(
+		Option{
 			Path:        path,
 			Method:      "GET",
 			SubMethod:   []string{"POST"},
@@ -120,9 +120,9 @@ func NewTypedAPI[T, U any, E error](path string, handler func(*Request, T) (U, E
 	)
 }
 
-func NewTypedUI[T, U any, E error](path string, handler func(*Request, T) (U, E)) *GenericTypedHandler[T, U, E] {
-	return NewTypedHandler(
-		HandlerOption{
+func NewTypedUI[T, U any, E error](path string, handler func(*Runtime, T) (U, E)) *GenericFunction[T, U, E] {
+	return NewFunction(
+		Option{
 			Path:        path,
 			Method:      "GET",
 			SubMethod:   []string{"POST"},
@@ -132,9 +132,9 @@ func NewTypedUI[T, U any, E error](path string, handler func(*Request, T) (U, E)
 	)
 }
 
-func GetClassHandlers(class string) []TypedHandler {
-	list := make([]TypedHandler, 0, len(typedHandlerList))
-	for _, th := range typedHandlerList {
+func GetClassHandlers(class string) []Function {
+	list := make([]Function, 0, len(FunctionList))
+	for _, th := range FunctionList {
 		if th.Options().Class == class {
 			list = append(list, th)
 		}
