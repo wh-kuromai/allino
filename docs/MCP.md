@@ -1,0 +1,159 @@
+# allino - MCP
+
+allino can expose selected `Function`s as an MCP-compatible HTTP JSON-RPC endpoint.
+
+Set `Option.MCP` on a function, then start the server normally. During `OnFunctionInit`, allino registers the MCP HTTP handler when at least one MCP-enabled function exists.
+
+The default endpoint is:
+
+```text
+POST /mcp
+```
+
+## Supported Function Types
+
+`Option.MCP` accepts these values:
+
+| Value | MCP method support | Use case |
+| --- | --- | --- |
+| `tool` | `tools/list`, `tools/call` | Callable tools for LLM agents |
+| `resource` | `resources/list`, `resources/read` | Readable resources |
+| `prompt` | `prompts/list`, `prompts/get` | Prompt templates |
+
+## Tool Example
+
+```go
+type EchoToolInput struct {
+	Message string `json:"message" validate:"required"`
+}
+
+type EchoToolOutput struct {
+	Echo string `json:"echo"`
+}
+
+var EchoToolFunction = allino.NewFunction(
+	allino.Option{
+		Name:        "echo",
+		Description: "Echoes a message.",
+		ContentType: allino.JSON,
+		MCP:         "tool",
+	},
+	func(r *allino.Runtime, input *EchoToolInput) (*EchoToolOutput, error) {
+		return &EchoToolOutput{Echo: input.Message}, nil
+	},
+)
+```
+
+Start your app:
+
+```sh
+go run main.go serve
+```
+
+List tools:
+
+```sh
+curl -s http://localhost:8000/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+Call the tool:
+
+```sh
+curl -s http://localhost:8000/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"message":"hello"}}}'
+```
+
+The result contains both MCP text content and structured JSON output:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "structuredContent": {
+      "echo": "hello"
+    },
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"echo\":\"hello\"}"
+      }
+    ]
+  }
+}
+```
+
+## Naming
+
+MCP names are resolved from:
+
+1. `Option.Name`
+2. `Option.Path`, when `Name` is empty
+
+Names are normalized to MCP-friendly characters: letters, numbers, `_`, and `-`.
+
+For stable MCP clients, prefer setting `Option.Name` explicitly.
+
+## Schema Generation
+
+allino uses the same typed function metadata used for OpenAPI generation:
+
+- Input JSON schema is generated from `Option.InputType()`.
+- Output JSON schema is generated from `Option.OutputType()`.
+- `Description` is used as the MCP tool/resource/prompt description.
+
+For tools, `tools/list` includes both `inputSchema` and `outputSchema`.
+
+## Function Execution
+
+MCP calls execute the function through the internal `Option` invoker. This means the MCP path shares the same typed JSON input/output path used by job workers:
+
+- JSON `arguments` are decoded into the function input type.
+- `go-playground/validator` validation is applied unless disabled.
+- The function output is encoded as JSON.
+- Function errors are returned as MCP tool errors for `tools/call`.
+
+MCP calls pass only JSON-RPC `arguments` as input. HTTP query and form values are not merged into the function input.
+
+## Resources
+
+Resource functions are exposed with generated URIs:
+
+```text
+allino://<name>
+```
+
+Example request:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "resources/read",
+  "params": {
+    "uri": "allino://my_resource",
+    "arguments": {}
+  }
+}
+```
+
+## Prompts
+
+Prompt functions use their input schema to generate MCP prompt arguments. `prompts/get` calls the function and returns the output as a user prompt message.
+
+Example request:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "prompts/get",
+  "params": {
+    "name": "my_prompt",
+    "arguments": {}
+  }
+}
+```

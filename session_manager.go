@@ -50,7 +50,7 @@ func (c *SessionConfig) setup(sv *Server) (*sessionManager, error) {
 var SessionExtension = NewExtension[any, any](
 	"session",
 	&ExtOption{
-		OnHandlerInit: func(s *Server, virtual *Runtime, opt *Option) (err error) {
+		OnFunctionInit: func(s *Server, virtual *Runtime, opt *Option) (err error) {
 			if opt.Session.Type == "sticky" {
 				if s.session == nil {
 					s.session, err = s.Config.Session.setup(s)

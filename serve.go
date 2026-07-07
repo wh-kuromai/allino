@@ -303,7 +303,7 @@ func NewServer(config *Config, extconfig ...map[string]any) (*Server, error) {
 
 	for _, ext := range s.extopts {
 		if ext.OnInit != nil {
-			err = ext.OnInit(s, NewRequest(s, nil))
+			err = ext.OnInit(s, NewRuntime(s, nil))
 			if err != nil {
 				return nil, fmt.Errorf("OnInit error for Extension %s: %w", ext.Name, err)
 			}
@@ -327,7 +327,7 @@ func NewServer(config *Config, extconfig ...map[string]any) (*Server, error) {
 	for _, th := range s.FunctionCache {
 		opt := th.Options()
 		if opt.OnInit != nil {
-			err = opt.OnInit(s, NewRequest(s, nil))
+			err = opt.OnInit(s, NewRuntime(s, nil))
 			if err != nil {
 				return nil, fmt.Errorf("OnInit error for Function %s: %w", opt.Path, err)
 			}
@@ -639,7 +639,7 @@ WARNING: debug=true
 	for _, th := range s.FunctionCache {
 		opt := th.Options()
 		if opt.OnShutdown != nil {
-			err = opt.OnShutdown(s, NewRequest(s, nil))
+			err = opt.OnShutdown(s, NewRuntime(s, nil))
 			if err != nil {
 				s.errorPrintln(fmt.Sprintf("OnShutdown error for Function `%s`: ", opt.Path), err)
 			}
@@ -648,7 +648,7 @@ WARNING: debug=true
 
 	for _, ext := range s.extopts {
 		if ext.OnShutdown != nil {
-			err = ext.OnShutdown(s, NewRequest(s, nil))
+			err = ext.OnShutdown(s, NewRuntime(s, nil))
 			if err != nil {
 				s.errorPrintln(fmt.Sprintf("OnShutdown error for Extension `%s`: ", ext.Name), err)
 			}
@@ -683,10 +683,10 @@ func (s *Server) serveInitOnly() {
 
 	for _, ext := range s.extopts {
 		s.Logger.Info("extension init", zap.String("name", ext.Name))
-		if ext.OnHandlerInit != nil {
+		if ext.OnFunctionInit != nil {
 			opts := s.RegisteredFunctions()
 			for _, opt := range opts {
-				err := ext.OnHandlerInit(s, NewRequest(s, nil), opt)
+				err := ext.OnFunctionInit(s, NewRuntime(s, nil), opt)
 				if err != nil {
 					s.errorPrintln(fmt.Sprintf("OnHandlerInit error for Extension `%s` to path `%s`: ", ext.Name, opt.Path), err)
 				}
@@ -694,7 +694,7 @@ func (s *Server) serveInitOnly() {
 
 			for _, h := range s.internalHandlerCache {
 				opt := h.Options()
-				err := ext.OnHandlerInit(s, NewRequest(s, nil), opt)
+				err := ext.OnFunctionInit(s, NewRuntime(s, nil), opt)
 				if err != nil {
 					s.errorPrintln(fmt.Sprintf("OnHandlerInit error for Extension `%s` to path `%s`: ", ext.Name, opt.Path), err)
 				}
@@ -711,7 +711,7 @@ func (s *Server) serveInitOnly() {
 
 	for _, ext := range s.extopts {
 		if ext.OnServe != nil {
-			err := ext.OnServe(s, NewRequest(s, nil))
+			err := ext.OnServe(s, NewRuntime(s, nil))
 			if err != nil {
 				s.errorPrintln(fmt.Sprintf("OnServe error for Extension `%s`: ", ext.Name), err)
 			}

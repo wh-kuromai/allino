@@ -290,7 +290,7 @@ func NewFunction[T, U any, E error](option Option, handlefunc func(r *Runtime, i
 		handlerMarshalMap[encodeHandlerName(options)] = rw
 	}
 	options.hasSelfDiscovery = hasSelfDiscovery(reflect.TypeOf(t).Elem())
-	options.consumer = rw.job_consume
+	options.invoker = rw.invokeFunctionJSON
 
 	FunctionList = append(FunctionList, rw)
 	return rw

@@ -147,7 +147,7 @@ func (jobm *jobManager) WorkerInit(s callStrategy, sv *Server) {
 							}
 						}()
 
-						r := NewRequest(sv, nil)
+						r := NewRuntime(sv, nil)
 						defer r.do_defer()
 						r.cache.requestid = jtask.Key()
 						r.cache.req_type = REQUEST_JOB
@@ -157,7 +157,7 @@ func (jobm *jobManager) WorkerInit(s callStrategy, sv *Server) {
 						if !r.config.Log.Silent {
 							r.logger.Info("job started", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()))
 						}
-						_, outjson, errjson, syserr := opt.consumer(r, jtask.Handler(), jtask.Meta().Version, jtask.Input(), false, nil)
+						_, outjson, errjson, syserr := opt.invoker(r, jtask.Handler(), jtask.Meta().Version, jtask.Input(), false, nil)
 						if syserr != nil {
 							if !r.config.Log.Silent {
 								r.logger.Error("job failed", zap.String("handler", jtask.Handler()), zap.String("requestid", jtask.Key()), zap.Error(syserr))

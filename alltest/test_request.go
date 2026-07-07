@@ -8,7 +8,7 @@ import (
 )
 
 func NewTestRequest(s *allino.Server) *allino.Runtime {
-	req := allino.NewRequest(s, nil)
+	req := allino.NewRuntime(s, nil)
 	return req
 }
 

@@ -30,7 +30,7 @@ var sqlStatusCodeStrings = []string{
 	"error",
 }
 
-type jobconsumer = func(r *Runtime, handler, version string, injson []byte, direct bool, infunc func(input any) error) (key string, outjson []byte, err []byte, syserr error)
+type functionInvoker = func(r *Runtime, handler, version string, injson []byte, direct bool, infunc func(input any) error) (key string, outjson []byte, err []byte, syserr error)
 
 type callSQLStrategy struct {
 	name     string

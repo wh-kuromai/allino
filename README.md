@@ -17,6 +17,7 @@ Let your AI generate your apps using best-practice OSS – automatically.
 - **Automatic input validation** via `go-playground/validator`
 - **Built-in Authentication & Authorization support** with native CSRF protection
 - **Auto-generated OpenAPI docs** for your API
+- **MCP endpoint generation** for exposing typed Functions as tools/resources/prompts
 - **Popular OSS integrations via a [single JSON config](./docs/CONFIG.md)**: `fiber`, `go-redis`, `sql`, and more
 - **Logging** : Apache Combined access-log, structured error logging with `zap`, log rotation via `lumberjack` and `cron`
 - **Test code generation** with **[this prompt](./docs/TEST.md#ai-prompt-template-for-test-works-well-with-chatgpt)**
@@ -254,6 +255,11 @@ type Option struct {
   Name    string // Logical name of this handler. Required when using Job mode.
   Version string // Semantic version of the handler (e.g. "1.0.0"). Optional.
 
+  // MCP exposes this function through POST /mcp.
+  // Supported values: "tool", "resource", "prompt".
+  // Name and Description are used for MCP metadata.
+  MCP string
+
   Class string // Make this handler class method.
 
   // Cron expression to schedule this handler.
@@ -436,6 +442,44 @@ func main() {
 ```
 
 This makes it easy to incrementally migrate your existing API server to allino, without needing to rewrite everything from scratch.
+
+---
+### 🔌 Want to expose a Function as an MCP tool?
+
+Set `Option.MCP` to `"tool"` and give the function a stable `Name`.
+When the server starts, allino registers `POST /mcp` and exposes the function through MCP `tools/list` and `tools/call`.
+
+```go
+type EchoToolInput struct {
+	Message string `json:"message" validate:"required"`
+}
+
+type EchoToolOutput struct {
+	Echo string `json:"echo"`
+}
+
+var EchoToolFunction = allino.NewFunction(
+	allino.Option{
+		Name:        "echo",
+		Description: "Echoes a message.",
+		ContentType: allino.JSON,
+		MCP:         "tool",
+	},
+	func(r *allino.Runtime, input *EchoToolInput) (*EchoToolOutput, error) {
+		return &EchoToolOutput{Echo: input.Message}, nil
+	},
+)
+```
+
+```bash
+$ go run main.go serve
+$ curl -s http://localhost:8000/mcp \
+    -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"message":"hello"}}}'
+```
+
+`MCP: "resource"` and `MCP: "prompt"` are also supported.
+See [MCP docs](./docs/MCP.md) for details.
 
 ---
 ### 🧪 Want to generate even more perfect OpenAPI docs?

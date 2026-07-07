@@ -26,29 +26,34 @@ type Option struct {
 	NoWrapJSON         bool
 	HTMLTemplate       string
 
-	// Custom field
-	Package string
-	Extra   any
-
 	// Session
 	Session SessionOption
 
 	// Job
-	Name    string
-	Version string
 	Cron    string
 	JobMode string
 	Job     JobOption
+
+	// Pipeline (experimental)
+	Next []Function
+
+	// AI (experimental)
+	SystemPrompt string
+	Tools        []Function
+	MCP          string // "tool", "resource", "prompt"
 
 	// Logs
 	AutoAudit    bool
 	AutoAuditMsg string
 
 	// Semantics
-	// Internal    bool
-	Summary     string
-	Description string
-	Class       string
+	Package     string // optional: override auto package detection, used for route printing,
+	Name        string // required: job
+	Version     string // required: job
+	Summary     string // optional: openapi
+	Description string // optional: openapi, tools, mcp
+	Class       string // experimental
+	Extra       any    // optional
 
 	// Reflection Hints
 	InputTypeHint  any
@@ -61,7 +66,7 @@ type Option struct {
 
 	// cache
 	parsedTemplate *template.Template
-	consumer       jobconsumer
+	invoker        functionInvoker
 
 	inputType        reflect.Type
 	outputType       reflect.Type

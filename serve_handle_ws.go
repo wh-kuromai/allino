@@ -56,7 +56,7 @@ func (s *Server) HandleWebsocket(pattern string, requestHandlerFunc WebsocketReq
 	}
 
 	s.Fiber.Use(pattern, func(c *fiber.Ctx) error {
-		req := NewRequest(s, c)
+		req := NewRuntime(s, c)
 		defer req.do_defer()
 		req.cache.req_type = REQUEST_WS
 		err := requestHandlerFunc(req)

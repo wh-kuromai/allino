@@ -102,7 +102,7 @@ type requestCache struct {
 	deferfn []func() error
 }
 
-func NewRequest(s *Server, w *fiber.Ctx) *Runtime {
+func NewRuntime(s *Server, w *fiber.Ctx) *Runtime {
 	req := &Runtime{
 		config: s.Config,
 		fiber:  w,

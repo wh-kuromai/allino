@@ -125,7 +125,7 @@ func callRedisInit(s *Server, opt *Option) error {
 			if !ok {
 				return ErrStreamInputDecodeFailed
 			}
-			r := NewRequest(s, nil)
+			r := NewRuntime(s, nil)
 			defer r.do_defer()
 			r.cache.requestid = reqid
 			r.cache.req_type = REQUEST_STREAM
@@ -147,7 +147,7 @@ func callRedisInit(s *Server, opt *Option) error {
 				}
 			}
 
-			opt.consumer(r, encodeHandlerName(opt), versionstr, []byte(injson), false, nil)
+			opt.invoker(r, encodeHandlerName(opt), versionstr, []byte(injson), false, nil)
 			return nil
 		}
 

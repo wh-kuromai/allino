@@ -19,7 +19,7 @@ type ExtOption struct {
 
 	SQLSchema       func(driver string) string
 	OnInit          func(s *Server, virtual *Runtime) error
-	OnHandlerInit   func(s *Server, virtual *Runtime, opt *Option) error
+	OnFunctionInit  func(s *Server, virtual *Runtime, opt *Option) error
 	OnServe         func(s *Server, virtual *Runtime) error
 	OnShutdown      func(s *Server, virtual *Runtime) error
 	OnAuthZ         func(r *Runtime, jwt *cryptino.JSONWebToken) (*cryptino.JSONWebToken, error)

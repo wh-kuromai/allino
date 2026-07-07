@@ -65,7 +65,7 @@ type JobOption struct {
 var JobExtension = NewExtension[any, any](
 	"job",
 	&ExtOption{
-		OnHandlerInit: func(s *Server, virtual *Runtime, opt *Option) (err error) {
+		OnFunctionInit: func(s *Server, virtual *Runtime, opt *Option) (err error) {
 			err = callSQLInit(s, opt)
 			if err != nil && !s.Config.Log.Silent {
 				s.Logger.Warn(
@@ -136,7 +136,7 @@ func call_direct(sv *Server, r *Runtime, handler string, injson []byte, infunc f
 	r.cache.parentjobid = jec.JobID()
 	r.cache.rootjobid = jec.JobID()
 
-	return opt.consumer(r, encodeHandlerName(opt), handlerVersion(opt), injson, true, infunc)
+	return opt.invoker(r, encodeHandlerName(opt), handlerVersion(opt), injson, true, infunc)
 }
 
 func unmarshalfnMake[U any, E error](r *Runtime, opt *Option, upool *ReflectPool[U], epool *ReflectPool[E], handler string) func(ji JobInfo, outjson []byte, errjson []byte, serr error) (output U, err error, syserr error) {
@@ -379,7 +379,7 @@ func (rw *GenericFunction[T, U, E]) call_job(r *Runtime, input T, fromcall bool)
 }
 
 // called from CLI or Worker
-func (rw *GenericFunction[T, U, E]) job_consume(r *Runtime, handler, version string, injson []byte, direct bool, infunc func(input any) error) (key string, outputz []byte, errjsonz []byte, syserr error) {
+func (rw *GenericFunction[T, U, E]) invokeFunctionJSON(r *Runtime, handler, version string, injson []byte, direct bool, infunc func(input any) error) (key string, outputz []byte, errjsonz []byte, syserr error) {
 
 	var input T
 	var innererr error

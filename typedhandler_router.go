@@ -25,7 +25,7 @@ func (r *Server) TypedHandle(th Function) {
 			r.Logger.Error("cron error", zap.String("spec", rcron), zap.String("handler", th.Options().Name))
 		} else {
 			eid, err := r.Cron.AddFunc(rcron, func() {
-				rr := NewRequest(r, nil)
+				rr := NewRuntime(r, nil)
 				defer rr.do_defer()
 				rr.cache.req_type = REQUEST_CRON
 				th.Handlefunc(rr, nil)
