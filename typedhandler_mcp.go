@@ -17,11 +17,12 @@ import (
 	"go.uber.org/zap"
 )
 
-const mcpEndpoint = "/mcp"
+const defaultMCPEndpoint = "/mcp"
 
 var mcpRegisteredServers sync.Map
 
 type MCPConfig struct {
+	Endpoint   string   `json:"endpoint"`
 	PromptDirs []string `json:"promptDirs"`
 }
 
@@ -61,13 +62,14 @@ func registerMCPHandlers(s *Server) {
 	if _, loaded := mcpRegisteredServers.LoadOrStore(s, true); loaded {
 		return
 	}
-	s.HandleFiber(http.MethodPost, mcpEndpoint, func(c *fiber.Ctx) error {
+	endpoint := mcpEndpoint()
+	s.HandleFiber(http.MethodPost, endpoint, func(c *fiber.Ctx) error {
 		return handleMCPRequest(s, c)
 	})
-	s.HandleFiber(http.MethodGet, mcpEndpoint, func(c *fiber.Ctx) error {
+	s.HandleFiber(http.MethodGet, endpoint, func(c *fiber.Ctx) error {
 		return c.JSON(map[string]any{
 			"name":      s.Config.AppName,
-			"endpoint":  mcpEndpoint,
+			"endpoint":  endpoint,
 			"protocol":  "2024-11-05",
 			"transport": "streamable-http",
 		})
@@ -82,6 +84,17 @@ func mcpConfig() *MCPConfig {
 		}
 	}
 	return &MCPConfig{}
+}
+
+func mcpEndpoint() string {
+	endpoint := strings.TrimSpace(mcpConfig().Endpoint)
+	if endpoint == "" {
+		return defaultMCPEndpoint
+	}
+	if !strings.HasPrefix(endpoint, "/") {
+		endpoint = "/" + endpoint
+	}
+	return endpoint
 }
 
 type mcpJSONRPCRequest struct {
@@ -113,8 +126,11 @@ func handleMCPRequest(s *Server, c *fiber.Ctx) error {
 		req.ID = []byte("null")
 	}
 
-	result, err := dispatchMCPRequest(s, NewRuntime(s, c), &req)
+	r := NewRuntime(s, c)
+	r.cache.req_type = REQUEST_HTTP
+	result, err := dispatchMCPRequest(s, r, &req)
 	if err != nil {
+		mcpLogError(r, "request", req.Method, "dispatch", err)
 		return c.JSON(mcpError(req.ID, -32603, err.Error()))
 	}
 
@@ -285,14 +301,19 @@ func mcpToolCall(s *Server, r *Runtime, params json.RawMessage) (any, error) {
 		Arguments json.RawMessage `json:"arguments"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
+		mcpLogError(r, "tool", "", "params", err)
 		return nil, err
 	}
 	opt := findMCPOption(s, "tool", p.Name)
 	if opt == nil {
-		return nil, fmt.Errorf("MCP tool not found: %s", p.Name)
+		err := fmt.Errorf("MCP tool not found: %s", p.Name)
+		mcpLogError(r, "tool", p.Name, "lookup", err)
+		return nil, err
 	}
+	mcpLogInfo(r, "mcp tool started", "tool", p.Name)
 	output, err := callMCPFunction(s, r, opt, p.Arguments)
 	if err != nil {
+		mcpLogError(r, "tool", p.Name, "call", err)
 		return map[string]any{
 			"isError": true,
 			"content": []map[string]any{{
@@ -303,8 +324,10 @@ func mcpToolCall(s *Server, r *Runtime, params json.RawMessage) (any, error) {
 	}
 	text, err := marshalMCPText(output)
 	if err != nil {
+		mcpLogError(r, "tool", p.Name, "marshal", err)
 		return nil, err
 	}
+	mcpLogInfo(r, "mcp tool completed", "tool", p.Name)
 	return map[string]any{
 		"structuredContent": output,
 		"content": []map[string]any{{
@@ -334,21 +357,28 @@ func mcpResourceRead(s *Server, r *Runtime, params json.RawMessage) (any, error)
 		Arguments json.RawMessage `json:"arguments"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
+		mcpLogError(r, "resource", "", "params", err)
 		return nil, err
 	}
 	name := strings.TrimPrefix(p.URI, "allino://")
 	opt := findMCPOption(s, "resource", name)
 	if opt == nil {
-		return nil, fmt.Errorf("MCP resource not found: %s", p.URI)
+		err := fmt.Errorf("MCP resource not found: %s", p.URI)
+		mcpLogError(r, "resource", name, "lookup", err)
+		return nil, err
 	}
+	mcpLogInfo(r, "mcp resource started", "resource", name)
 	output, err := callMCPFunction(s, r, opt, p.Arguments)
 	if err != nil {
+		mcpLogError(r, "resource", name, "call", err)
 		return nil, err
 	}
 	text, err := marshalMCPText(output)
 	if err != nil {
+		mcpLogError(r, "resource", name, "marshal", err)
 		return nil, err
 	}
+	mcpLogInfo(r, "mcp resource completed", "resource", name)
 	return map[string]any{
 		"contents": []map[string]any{{
 			"uri":      p.URI,
@@ -426,18 +456,23 @@ func mcpPromptGet(s *Server, r *Runtime, params json.RawMessage) (any, error) {
 		Arguments json.RawMessage `json:"arguments"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
+		mcpLogError(r, "prompt", "", "params", err)
 		return nil, err
 	}
 	opt := findMCPOption(s, "prompt", p.Name)
 	if opt != nil {
+		mcpLogInfo(r, "mcp prompt started", "prompt", p.Name)
 		output, err := callMCPFunction(s, r, opt, p.Arguments)
 		if err != nil {
+			mcpLogError(r, "prompt", p.Name, "call", err)
 			return nil, err
 		}
 		text, err := marshalMCPText(output)
 		if err != nil {
+			mcpLogError(r, "prompt", p.Name, "marshal", err)
 			return nil, err
 		}
+		mcpLogInfo(r, "mcp prompt completed", "prompt", p.Name)
 		return map[string]any{
 			"description": opt.Description,
 			"messages": []map[string]any{{
@@ -452,11 +487,15 @@ func mcpPromptGet(s *Server, r *Runtime, params json.RawMessage) (any, error) {
 
 	prompt, err := mcpFindMarkdownPrompt(s, p.Name)
 	if err != nil {
+		mcpLogError(r, "prompt", p.Name, "markdown_lookup", err)
 		return nil, err
 	}
 	if prompt == nil {
-		return nil, fmt.Errorf("MCP prompt not found: %s", p.Name)
+		err := fmt.Errorf("MCP prompt not found: %s", p.Name)
+		mcpLogError(r, "prompt", p.Name, "lookup", err)
+		return nil, err
 	}
+	mcpLogInfo(r, "mcp prompt completed", "prompt", p.Name)
 	return map[string]any{
 		"description": prompt.Description,
 		"messages": []map[string]any{{
@@ -485,19 +524,37 @@ func callMCPFunction(s *Server, r *Runtime, opt *Option, args json.RawMessage) (
 		return s.Validator.Struct(input)
 	})
 	if syserr != nil {
+		mcpLogError(r, opt.MCP, mcpFunctionName(opt), "system", syserr)
 		return nil, syserr
 	}
 	if len(errJSON) > 0 {
-		return nil, fmt.Errorf("%s", errJSON)
+		err := fmt.Errorf("%s", errJSON)
+		mcpLogError(r, opt.MCP, mcpFunctionName(opt), "function", err)
+		return nil, err
 	}
 	if len(outputJSON) == 0 {
 		return nil, nil
 	}
 	var output any
 	if err := json.Unmarshal(outputJSON, &output); err != nil {
+		mcpLogError(r, opt.MCP, mcpFunctionName(opt), "decode_output", err)
 		return nil, err
 	}
 	return output, nil
+}
+
+func mcpLogInfo(r *Runtime, msg, kind, name string) {
+	if r == nil || r.config == nil || r.config.Log.Silent {
+		return
+	}
+	r.logger.Info(msg, zap.String("kind", kind), zap.String("name", name))
+}
+
+func mcpLogError(r *Runtime, kind, name, component string, err error) {
+	if r == nil || r.config == nil || r.config.Log.Silent {
+		return
+	}
+	r.logger.Error("mcp error", zap.String("kind", kind), zap.String("name", name), zap.String("component", component), zap.Error(err))
 }
 
 func marshalMCPText(v any) (string, error) {

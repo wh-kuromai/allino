@@ -10,6 +10,13 @@ The default endpoint is:
 POST /mcp
 ```
 
+You can change the endpoint with config:
+
+```yaml
+mcp:
+  endpoint: /my_mcp
+```
+
 ## Supported Function Types
 
 `Option.MCP` accepts these values:
@@ -166,6 +173,7 @@ Configure `mcp.promptDirs`:
 
 ```yaml
 mcp:
+  endpoint: /mcp
   promptDirs:
     - ./prompts
 ```

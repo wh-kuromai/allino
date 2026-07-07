@@ -101,22 +101,20 @@ func printOpenAPI(s *Server) {
 
 func printMCP(s *Server) {
 	config := mcpConfig()
+	endpoint := mcpEndpoint()
 	enabled := len(mcpOptions(s, "tool")) > 0 ||
 		len(mcpOptions(s, "resource")) > 0 ||
 		len(mcpOptions(s, "prompt")) > 0 ||
 		len(config.PromptDirs) > 0
 
-	fmt.Print(strings.TrimSpace(`
-MCP Endpoint:
-  POST /mcp
-Metadata Endpoint:
-  GET /mcp
-Protocol:
-  2024-11-05
-Transport:
-  streamable-http
-`))
-	fmt.Print("\n")
+	fmt.Print("MCP Endpoint:\n")
+	fmt.Printf("  POST %s\n", endpoint)
+	fmt.Print("Metadata Endpoint:\n")
+	fmt.Printf("  GET %s\n", endpoint)
+	fmt.Print("Protocol:\n")
+	fmt.Print("  2024-11-05\n")
+	fmt.Print("Transport:\n")
+	fmt.Print("  streamable-http\n")
 	fmt.Printf("Enabled:\n  %t\n", enabled)
 
 	if len(config.PromptDirs) > 0 {

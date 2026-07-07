@@ -145,6 +145,11 @@ log:
 websocket:
   origins: [ "http://localhost:8000" ]        # auto-check "Origin" header
 
+# MCP configuration (optional)
+mcp:
+  endpoint: "/mcp"                             # HTTP JSON-RPC endpoint for MCP clients.
+  promptDirs: [ "./prompts" ]                  # Mount local Markdown prompt files.
+
 # HTTPS configuration (optional)
 https:
   certFile: /path/to/your/server-cert.pem
@@ -172,5 +177,4 @@ sql:
   driver: "sqlite3"
   dsn: "./foo.db"
 ```
-
 

@@ -84,7 +84,7 @@ Use the mounted prompt body.
 	}
 
 	server := allino.NewTestServer(&allino.Config{
-		ConfigBytes: []byte("mcp:\n  promptDirs:\n    - " + dir + "\n"),
+		ConfigBytes: []byte("mcp:\n  endpoint: /mounted_mcp\n  promptDirs:\n    - " + dir + "\n"),
 		Debug:       true,
 		SQL: allino.SQLConfig{
 			Driver: "sqlite",
@@ -93,7 +93,7 @@ Use the mounted prompt body.
 
 	post := func(body string) map[string]any {
 		t.Helper()
-		req := httptest.NewRequest("POST", "/mcp", bytes.NewBufferString(body))
+		req := httptest.NewRequest("POST", "/mounted_mcp", bytes.NewBufferString(body))
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := server.Fiber.Test(req, -1)
 		if err != nil {
