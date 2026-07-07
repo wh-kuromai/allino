@@ -1,180 +1,336 @@
-
 # allino - CONFIG
 
-## ✍ How to configure the allino server?
+allino loads server settings from YAML, JSON, and encrypted config files, then initializes built-in services such as Redis, SQL, logging, WebSocket, MCP, jobs, S3, and AI clients.
 
-allino integrates various popular open-source libraries using a single YAML configuration file.
+The default config file name is:
 
-You don't need to write any code to start using features like `fiber`, `go-redis`, `sql`, `zap`, `lumberjack`, and `cron`.
-Just add the following two lines to your YAML config, and you'll be able to access a `*redis.Client` instance via `r.Redis` in any handler.
-
-```yaml
-redis:
-  url: "redis://localhost:6379/0"
+```text
+allino.config.yaml
 ```
 
-## YAML Setting
+The prefix comes from `Config.Prefix`. If you set `Prefix` to `myapp` in Go, allino looks for `myapp.config.yaml` and `myapp.config.enc`.
+
+## Loading Order
+
+`NewServer` applies config in this order. Later sources override earlier values.
+
+1. Embedded defaults from `appsetting_default.yaml`
+2. Values passed in the Go `*allino.Config`
+3. `Config.ConfigBytes`, when set
+4. `<prefix>.config.yaml` and `<prefix>.config.enc` from `Config.ConfigFS`
+5. `secrets.config.json` and `secrets.config.enc` from `Config.ConfigFS`
+6. The same files from `Config.ConfigDir` on disk
+7. CLI flags such as `--config-dir`, `--bind`, and `--debug`
+
+Encrypted `.enc` files require `<PREFIX>_SECRET`, for example `ALLINO_SECRET`. The value must be a base64 raw URL encoded 32-byte key.
+
+## Basic Example
 
 ```yaml
-# Application metadata
-appName: My First allino API   # Name of your app, also used for OpenAPI doc `title`
-version: 0.0.1                 # Version
+appName: My First allino API
+description: API server
+version: 0.0.1
+bind: ":8000"
+nowelcome: false
+nowrapjson: false
+debug: false
 
-# Server binding information
-bind: ":8000"                  # Address to bind (e.g., ":8000", "0.0.0.0:80", or "unix:/tmp/your.sock")
-trustXForwardedFor: false      # True if this server works behind trusted proxy 
-nowrapjson: false              # if true, do not pack {"data":{...}} or {"error":{...}} 
-debug: false                   # Enable debug features (logging, verbose output, etc.)
+trustedproxy:
+  trustXForwardedFor: false
+  trustXRequestID: false
+```
 
-# Routing configuration (optional)
+`bind` accepts TCP addresses such as `:8000` and Unix sockets with the `unix:` prefix.
+
+`debug: true` enables debug behavior. Do not use it in production.
+
+## Routing
+
+```yaml
 routing:
-  fallbacks: ["index.html", "200.html"]   # Files to serve when the requested file is not found (SPA support).
-  404error: "/404"                        # Custom path to serve for 404 Not Found errors.
-  error: "/error"                         # Path to serve for generic application errors.
+  fallbacks: ["index.html", "200.html"]
+  404error: "/404"
+  error: "/error"
+```
 
-# Login configuration
-#   This section defines security settings related to authentication,
-#   such as cookie/token expiration, and cryptographic keys for login flows.
-#   You can provide either:
-#     - a private key (for servers that initiate login sessions), or
-#     - a public key (for servers that only perform cookie/token validation).
-#
-#   If omitted, a private key will be generated automatically at startup.
-#
-#   In production environments, it is recommended to manage your JWT keys and other sensitive data securely
-#   using the following procedure:
-#
-#     1. Generate key material by running:
-#          yourapp keygen
-#        This will create a `secrets.config.js` file containing your JWT keys.
-#
-#     2. Move any sensitive settings (such as `login`, `redis`, `sql`, etc.)
-#        from your main config file into `secrets.config.js`.
-#
-#     3. Encrypt the file by running:
-#          yourapp encrypt secrets.config.js
-#        This will generate an encrypted `secrets.config.enc` file and print a decryption key.
-#        Be sure to **store the decryption key securely**.
-#
-#     4. When deploying the app:
-#          - Include only `secrets.config.enc` in your configuration directory.
-#          - Set the decryption key using the `ALLINO_SECRET` environment variable.
-#
-#     5. Keep the original `secrets.config.js` in a safe location and never deploy or commit it to version control.
-#
-#   (Note: Never commit unencrypted private keys or secret files to your repository.)
+`fallbacks` is used for static file fallback behavior such as SPA routing.
+
+## Login
+
+```yaml
 login:
-  publickey: { ... }   # Use yourapp keygen to generate proper public/private keys here.
+  publickey: { ... }
   privatekey: { ... }
 
   oauth:
-    expire: 3600                    # AccessToken expire in sec. (time.ParseDuration style also supported)
-    expire-longterm: 315360000      # APIToken expire in sec. (time.ParseDuration style also supported)
-    authbearer: true                # allow Authorization header
-    jwt_audience: "access_token"    # jwt audience field value
+    expire: 3600
+    expire_longterm: 315360000
+    querykey: "access_token"
+    formkey: "access_token"
+    authbearer: true
+    jwt_audience: "access_token"
+
   csrf:
     expire: 3600
-    querykey: "csrf_token"          # query key for CSRF Token (delete if you dont accept token in query)
-    formkey: "csrf_token"           # form key for CSRF Token
-    jwt_audience: "csrf_token"      # jwt audience field value
+    querykey: "csrf_token"
+    formkey: "csrf_token"
+    jwt_audience: "csrf_token"
+
   cookie:
-    name: allino_login              # Set-Cookie name
-    expire: 1209600                 # Set-Cookie expire in sec. (time.ParseDuration style also supported)
-    secure: false                   # Set-Cookie secure field
-    httponly: true                  # Set-Cookie httponly field
-    samesite: Lax                   # Set-Cookie samesite field
-    path: "/"                       # Set-Cookie path field
-    jwt_audience: "cookie"          # jwt audience field value
+    name: allino_login
+    expire: 1209600
+    secure: false
+    httponly: true
+    samesite: Lax
+    path: "/"
+    jwt_audience: "cookie"
+
   guest_cookie:
-    name: allino_guest              # Set-Cookie name
-    expire: 1209600                 # Set-Cookie expire in sec. (time.ParseDuration style also supported)
-    secure: false                   # Set-Cookie secure field
-    httponly: true                  # Set-Cookie httponly field
-    samesite: Lax                   # Set-Cookie samesite field
-    path: "/"                       # Set-Cookie path field
-    jwt_audience: "guest"           # jwt audience field value
+    name: allino_guest
+    expire: 1209600
+    secure: false
+    httponly: true
+    samesite: Lax
+    path: "/"
+    jwt_audience: "guest"
 
+  revoke:
+    use_login_revoke: false
+```
 
-# Redis configuration (optional)
-#   In production, avoid hardcoding credentials. 
-#   Move the redis.url setting into your encrypted `secrets.config.js` file.
+If both `privatekey` and `publickey` are omitted, allino generates a private key at startup.
+
+Use the CLI to create a local secret file:
+
+```sh
+yourapp keygen
+```
+
+This writes `secrets.config.json` in the config directory. Sensitive settings such as `login.privatekey`, Redis URLs, SQL DSNs, and API keys should live in `secrets.config.json` or `secrets.config.enc`, not in the main config file.
+
+Encrypt a config file:
+
+```sh
+yourapp encrypt --file secrets.config.json
+```
+
+The encrypted output is `secrets.config.enc`. Deploy the encrypted file with `ALLINO_SECRET`.
+
+## Redis
+
+```yaml
 redis:
   url: "redis://localhost:6379/0"
-
-# SQL configuration (optional)
-#   Database DSN strings often contain passwords.
-#   To protect them, move the dsn setting into the encrypted secrets file in production.
-sql:
-  driver: "mysql"
-  dsn: "user:password@tcp(localhost:3306)/exampledb?charset=utf8mb4&parseTime=True&loc=Local"
-
-# Logging configuration (optional)
-log:
-  silent: false       # minimize output
-  norequestid: false  # disable auto-add `request-id` to your zap log
-  accesslog:
-  - to : file                                 # "stdout", "stderr" or "file"
-    path: /path/to/your/simple_accesslog.txt  # filename for log file. (only if you don't use rotate)
-
-  - to : file                                 # "stdout", "stderr" or "file"
-    # `rotate` controls file rotation using natefinch/lumberjack.
-    # The same fields and behavior apply for both `accesslog` and `errorlog`.
-    # In addition to lumberjack's standard options, you can set `cron` (handled by robfig/cron)
-    # to schedule rotation independently of file size.
-    # see https://github.com/natefinch/lumberjack/tree/v2.0.0
-    # see https://pkg.go.dev/github.com/robfig/cron/v3@v3.0.1
-    rotate:                                   # settings for `natefinch/lumberjack` and `robfig/cron`
-      cron: "30 * * * *"                      # cron setting for log rotation by `robfig/cron` (ex. every hour on the half hour)
-      filename: "/path/to/your/accesslog.txt" # filename for log file. rotated file will be created on same dir.
-      maxsize: 200MB                          # MaxSize is the maximum size in megabytes before rotation. Defaults to 100 MB. Supports units: TB, GB, MB, KB, B
-      maxage: 24d                             # MaxAge is the maximum retention period based on the timestamp in the filename. Rounded up to the nearest whole day.
-      maxbackups: 0                           # MaxBackups is the maximum number of old log files to retain. Defaults to unlimited (0).
-      localtime: false                        # use localtime for filename.
-      compress: true                          # enable gzip compression for rotated files.
-  errorlog:
-  - to : stdout                               # `stdout`, `stderr` or `file`
-    loglevel: debug                           # zap log level (`debug`, `info`, `warn` or `fatal`)
-  - to : file                                 # `stdout`, `stderr` or `file`
-    format: json                              # output format `json` (zap.NewJSONEncoder) or "" (zap.NewConsoleEncoder)
-    rotate:                                   # `rotate` supports the same fields and behavior as in `accesslog.rotate` (see above)
-      cron: "30 * * * *"
-      filename: "/path/to/your/errorlog.txt"
-      compress: true
-
-# WebSocket configuration (optional)
-websocket:
-  origins: [ "http://localhost:8000" ]        # auto-check "Origin" header
-
-# MCP configuration (optional)
-mcp:
-  endpoint: "/mcp"                             # HTTP JSON-RPC endpoint for MCP clients.
-  promptDirs: [ "./prompts" ]                  # Mount local Markdown prompt files.
-
-# HTTPS configuration (optional)
-https:
-  certFile: /path/to/your/server-cert.pem
-  keyFile: /path/to/your/privatekey.pem
+  cluster_url: "redis://localhost:7000"
 ```
 
-### Using SQL
+Set either `url` for a single Redis instance or `cluster_url` for a Redis cluster.
 
-First, import any SQL client that is compatible with the `database/sql` package:
-
-```go
-import (
-  _ "github.com/go-sql-driver/mysql"   // MySQL client (driver: mysql)
-  _ "github.com/lib/pq"                // PostgreSQL client (driver: postgres)
-  _ "modernc.org/sqlite"               // Pure Go SQLite (driver: sqlite)
-  _ "github.com/mattn/go-sqlite3"      // SQLite3 (driver: sqlite3)
-)
-```
-
-Then, add your SQL settings to the config file.
-For example, if you use `sql.Open("sqlite3", "./foo.db")` in Go, your configuration should look like this:
+## SQL
 
 ```yaml
 sql:
   driver: "sqlite3"
   dsn: "./foo.db"
+  allow_migrate: true
 ```
+
+`driver` and `dsn` are passed to `database/sql`. Import the driver in your application:
+
+```go
+import (
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
+	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
+)
+```
+
+When `allow_migrate` is true, allino executes SQL schemas provided by registered extensions during startup.
+
+## Logging
+
+```yaml
+log:
+  silent: false
+  norequestid: false
+  zap:
+    addcaller: false
+    addcallerskip: 0
+    addstacktrace: error
+  accesslog:
+    - to: file
+      path: /path/to/access.log
+    - to: file
+      rotate:
+        cron: "30 * * * *"
+        filename: "/path/to/access.log"
+        maxsize: 200MB
+        maxage: 24d
+        maxbackups: 0
+        localtime: false
+        compress: true
+  errorlog:
+    - to: stdout
+      loglevel: debug
+    - to: file
+      format: json
+      rotate:
+        filename: "/path/to/error.log"
+        compress: true
+```
+
+`to` accepts `stdout`, `stderr`, and `file`. `format: json` uses zap's JSON encoder; otherwise the console encoder is used.
+
+`rotate` uses lumberjack options. `cron` schedules rotation with robfig/cron.
+
+## WebSocket
+
+```yaml
+websocket:
+  handshakeTimeout: 10s
+  subprotocols: ["v1"]
+  origins: ["http://localhost:8000"]
+  readBufferSize: 1024
+  writeBufferSize: 1024
+  enableCompression: true
+```
+
+These values are used as defaults by `Server.HandleWebsocket`.
+
+## MCP
+
+```yaml
+mcp:
+  endpoint: "/mcp"
+  promptDirs:
+    - ./prompts
+```
+
+See [MCP.md](./MCP.md) for the MCP endpoint and function exposure behavior.
+
+## Jobs
+
+```yaml
+job:
+  max_retry: 0
+  concurrency: 5
+  idle_interval: 1000ms
+  lease_duration: 20s
+  requeue_interval: 10s
+  wait_interval: 700ms
+  wait_timeout: 3s
+  redis_key_prefix: "allino:key:"
+  redis_stream_group_prefix: "allino:group:"
+  redis_stream_consumer_prefix: "allino:consumer:"
+```
+
+Job modes that use Redis streams, such as fanout and replay modes, require Redis configuration.
+
+## Session
+
+```yaml
+session:
+  serverid_filename: ".allino-server-id"
+  secret: "change-me"
+  expire: 24h
+  stickey_cookie:
+    name: allino_stickey
+    path: "/"
+    secure: false
+    httponly: true
+  nodeip: "127.0.0.1"
+  nodeip_env: "POD_IP"
+  proxyable_hosts: ["127.0.0.1"]
+  proxyable_hosts_regex: []
+  resources:
+    gpu: 1
+  redis_prefix: "allino:session"
+```
+
+Session settings are used by sticky session functions and session token handling.
+
+## TimeWheel
+
+```yaml
+timewheel:
+  slots: 32
+  tick_interval: 100ms
+```
+
+## Sqids
+
+```yaml
+sqids:
+  alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+  minlength: 8
+  blocklist: []
+```
+
+allino initializes `Runtime.Sqids()` from this section.
+
+## S3
+
+Use the default AWS credential chain with a region:
+
+```yaml
+s3:
+  aws_region: "ap-northeast-1"
+```
+
+Or static credentials:
+
+```yaml
+s3:
+  static:
+    base_endpoint: "http://localhost:9000"
+    key: "access-key"
+    secret: "secret-key"
+    session: ""
+    use_path_style: true
+```
+
+## AI
+
+```yaml
+ai:
+  default_model: "chatgpt:gpt-4.1"
+  tool_max_body_size: 1000
+  tool_max_loop: 2
+  chatgpt:
+    apikey: "sk-..."
+    response_api_url: "https://api.openai.com/v1/responses"
+```
+
+## HTTPS
+
+```yaml
+https:
+  certFile: /path/to/server-cert.pem
+  keyFile: /path/to/privatekey.pem
+```
+
+When `https.certFile` is set, allino serves HTTPS with the configured certificate and key.
+
+## System
+
+```yaml
+system:
+  disable_validator: false
+```
+
+`disable_validator` disables `go-playground/validator` checks for request input.
+
+## Fiber
+
+The `fiber` section maps to `github.com/gofiber/fiber/v2.Config`.
+
+```yaml
+fiber:
+  bodyLimit: 4194304
+  caseSensitive: false
+  strictRouting: false
+```
+
+Use Fiber's config field names when setting this section.
 
