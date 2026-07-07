@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
+	"github.com/goccy/go-yaml"
 	"github.com/gofiber/fiber/v2"
 	"github.com/wh-kuromai/jsonino"
 	"go.uber.org/zap"
@@ -17,31 +21,68 @@ const mcpEndpoint = "/mcp"
 
 var mcpRegisteredServers sync.Map
 
-var MCPExtension = NewExtension[any, any](
+type MCPConfig struct {
+	PromptDirs []string `json:"promptDirs"`
+}
+
+type mcpMarkdownPrompt struct {
+	Name        string
+	Description string
+	Text        string
+	Path        string
+}
+
+type mcpMarkdownPromptFrontMatter struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+var MCPExtension = NewExtension[MCPConfig, any](
 	"mcp",
 	&ExtOption{
+		OnInit: func(s *Server, virtual *Runtime) error {
+			if len(mcpConfig().PromptDirs) == 0 {
+				return nil
+			}
+			registerMCPHandlers(s)
+			return nil
+		},
 		OnFunctionInit: func(s *Server, virtual *Runtime, opt *Option) error {
 			if opt == nil || opt.MCP == "" {
 				return nil
 			}
-			if _, loaded := mcpRegisteredServers.LoadOrStore(s, true); loaded {
-				return nil
-			}
-			s.HandleFiber(http.MethodPost, mcpEndpoint, func(c *fiber.Ctx) error {
-				return handleMCPRequest(s, c)
-			})
-			s.HandleFiber(http.MethodGet, mcpEndpoint, func(c *fiber.Ctx) error {
-				return c.JSON(map[string]any{
-					"name":      s.Config.AppName,
-					"endpoint":  mcpEndpoint,
-					"protocol":  "2024-11-05",
-					"transport": "streamable-http",
-				})
-			})
+			registerMCPHandlers(s)
 			return nil
 		},
 	},
 )
+
+func registerMCPHandlers(s *Server) {
+	if _, loaded := mcpRegisteredServers.LoadOrStore(s, true); loaded {
+		return
+	}
+	s.HandleFiber(http.MethodPost, mcpEndpoint, func(c *fiber.Ctx) error {
+		return handleMCPRequest(s, c)
+	})
+	s.HandleFiber(http.MethodGet, mcpEndpoint, func(c *fiber.Ctx) error {
+		return c.JSON(map[string]any{
+			"name":      s.Config.AppName,
+			"endpoint":  mcpEndpoint,
+			"protocol":  "2024-11-05",
+			"transport": "streamable-http",
+		})
+	})
+}
+
+func mcpConfig() *MCPConfig {
+	for _, ext := range extensionList {
+		mcpExt, ok := ext.(*Extension[MCPConfig, any])
+		if ok && mcpExt.Option.Name == "mcp" {
+			return mcpExt.Config
+		}
+	}
+	return &MCPConfig{}
+}
 
 type mcpJSONRPCRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -319,17 +360,38 @@ func mcpResourceRead(s *Server, r *Runtime, params json.RawMessage) (any, error)
 
 func mcpPromptsList(s *Server) (any, error) {
 	prompts := []map[string]any{}
+	seen := map[string]bool{}
 	for _, opt := range mcpOptions(s, "prompt") {
 		schema, err := mcpInputSchemaMap(opt)
 		if err != nil {
 			return nil, err
 		}
+		name := mcpFunctionName(opt)
+		seen[name] = true
 		prompts = append(prompts, map[string]any{
-			"name":        mcpFunctionName(opt),
+			"name":        name,
 			"description": opt.Description,
 			"arguments":   mcpPromptArguments(schema),
 		})
 	}
+	markdownPrompts, err := mcpLoadMarkdownPrompts(s)
+	if err != nil {
+		return nil, err
+	}
+	for _, prompt := range markdownPrompts {
+		if seen[prompt.Name] {
+			continue
+		}
+		seen[prompt.Name] = true
+		prompts = append(prompts, map[string]any{
+			"name":        prompt.Name,
+			"description": prompt.Description,
+			"arguments":   []map[string]any{},
+		})
+	}
+	sort.Slice(prompts, func(i, j int) bool {
+		return fmt.Sprint(prompts[i]["name"]) < fmt.Sprint(prompts[j]["name"])
+	})
 	return map[string]any{"prompts": prompts}, nil
 }
 
@@ -367,24 +429,41 @@ func mcpPromptGet(s *Server, r *Runtime, params json.RawMessage) (any, error) {
 		return nil, err
 	}
 	opt := findMCPOption(s, "prompt", p.Name)
-	if opt == nil {
+	if opt != nil {
+		output, err := callMCPFunction(s, r, opt, p.Arguments)
+		if err != nil {
+			return nil, err
+		}
+		text, err := marshalMCPText(output)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"description": opt.Description,
+			"messages": []map[string]any{{
+				"role": "user",
+				"content": map[string]any{
+					"type": "text",
+					"text": text,
+				},
+			}},
+		}, nil
+	}
+
+	prompt, err := mcpFindMarkdownPrompt(s, p.Name)
+	if err != nil {
+		return nil, err
+	}
+	if prompt == nil {
 		return nil, fmt.Errorf("MCP prompt not found: %s", p.Name)
 	}
-	output, err := callMCPFunction(s, r, opt, p.Arguments)
-	if err != nil {
-		return nil, err
-	}
-	text, err := marshalMCPText(output)
-	if err != nil {
-		return nil, err
-	}
 	return map[string]any{
-		"description": opt.Description,
+		"description": prompt.Description,
 		"messages": []map[string]any{{
 			"role": "user",
 			"content": map[string]any{
 				"type": "text",
-				"text": text,
+				"text": prompt.Text,
 			},
 		}},
 	}, nil
@@ -434,4 +513,102 @@ func marshalMCPText(v any) (string, error) {
 		}
 		return string(buf), nil
 	}
+}
+
+func mcpLoadMarkdownPrompts(s *Server) ([]mcpMarkdownPrompt, error) {
+	prompts := []mcpMarkdownPrompt{}
+	for _, dir := range mcpConfig().PromptDirs {
+		root := mcpResolvePath(s, dir)
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".md") {
+				return nil
+			}
+			prompt, err := mcpLoadMarkdownPrompt(path)
+			if err != nil {
+				return err
+			}
+			prompts = append(prompts, prompt)
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Slice(prompts, func(i, j int) bool {
+		return prompts[i].Name < prompts[j].Name
+	})
+	return prompts, nil
+}
+
+func mcpFindMarkdownPrompt(s *Server, name string) (*mcpMarkdownPrompt, error) {
+	prompts, err := mcpLoadMarkdownPrompts(s)
+	if err != nil {
+		return nil, err
+	}
+	for _, prompt := range prompts {
+		if prompt.Name == name {
+			return &prompt, nil
+		}
+	}
+	return nil, nil
+}
+
+func mcpResolvePath(s *Server, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	base := s.Config.ConfigDir
+	if base == "" {
+		base, _ = os.Getwd()
+	}
+	return filepath.Join(base, path)
+}
+
+func mcpLoadMarkdownPrompt(path string) (mcpMarkdownPrompt, error) {
+	buf, err := os.ReadFile(path)
+	if err != nil {
+		return mcpMarkdownPrompt{}, err
+	}
+	frontmatter, body, err := mcpParseMarkdownPrompt(buf)
+	if err != nil {
+		return mcpMarkdownPrompt{}, fmt.Errorf("%s: %w", path, err)
+	}
+	name := frontmatter.Name
+	if name == "" {
+		name = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	}
+	name = mcpNameRe.ReplaceAllString(name, "_")
+	name = strings.Trim(name, "_")
+	return mcpMarkdownPrompt{
+		Name:        name,
+		Description: frontmatter.Description,
+		Text:        strings.TrimSpace(body),
+		Path:        path,
+	}, nil
+}
+
+func mcpParseMarkdownPrompt(buf []byte) (mcpMarkdownPromptFrontMatter, string, error) {
+	text := strings.ReplaceAll(string(buf), "\r\n", "\n")
+	if !strings.HasPrefix(text, "---\n") {
+		return mcpMarkdownPromptFrontMatter{}, text, nil
+	}
+	rest := strings.TrimPrefix(text, "---\n")
+	idx := strings.Index(rest, "\n---")
+	if idx < 0 {
+		return mcpMarkdownPromptFrontMatter{}, "", fmt.Errorf("unterminated YAML frontmatter")
+	}
+	yamlText := rest[:idx]
+	body := rest[idx+len("\n---"):]
+	body = strings.TrimPrefix(body, "\n")
+
+	var frontmatter mcpMarkdownPromptFrontMatter
+	if strings.TrimSpace(yamlText) != "" {
+		if err := yaml.Unmarshal([]byte(yamlText), &frontmatter); err != nil {
+			return mcpMarkdownPromptFrontMatter{}, "", err
+		}
+	}
+	return frontmatter, body, nil
 }

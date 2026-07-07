@@ -184,6 +184,18 @@ func NewCLI(config *Config, extconfig ...map[string]any) *CLI {
 		})
 	}
 
+	if !isDisabled("mcp") {
+		rootCmd.AddCommand(&cobra.Command{
+			Use:   "mcp",
+			Short: "Print MCP endpoint and exposed items",
+			Run: func(cmd *cobra.Command, args []string) {
+				s := CLIServer(cmd, args)
+				s.RegisterAllFunction()
+				printMCP(s)
+			},
+		})
+	}
+
 	if !isDisabled("version") {
 		rootCmd.AddCommand(&cobra.Command{
 			Use:   "version",

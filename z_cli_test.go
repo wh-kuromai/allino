@@ -40,6 +40,24 @@ func TestCLI_OpenAPI(t *testing.T) {
 	assert.Contains(t, output, "user:")
 }
 
+func TestCLI_MCP(t *testing.T) {
+	app := allino.NewCLI(nil)
+	app.Command.SetArgs([]string{"mcp"})
+
+	output := captureStdout(func() {
+		app.Run()
+	})
+
+	assert.Contains(t, output, "MCP Endpoint:")
+	assert.Contains(t, output, "POST /mcp")
+	assert.Contains(t, output, "Transport:")
+	assert.Contains(t, output, "streamable-http")
+	assert.Contains(t, output, "## Tools")
+	assert.Contains(t, output, "mcp_echo")
+	assert.Contains(t, output, "## Prompts")
+	assert.Contains(t, output, "## Resources")
+}
+
 func captureStdout(f func()) string {
 	// 現在の stdout を退避
 	old := os.Stdout

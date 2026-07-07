@@ -157,3 +157,50 @@ Example request:
   }
 }
 ```
+
+## Mounted Markdown Prompts
+
+You can also mount local directories that contain Markdown prompt files.
+
+Configure `mcp.promptDirs`:
+
+```yaml
+mcp:
+  promptDirs:
+    - ./prompts
+```
+
+Relative paths are resolved from `ConfigDir`. If `ConfigDir` is empty, paths are resolved from the current working directory.
+
+allino recursively scans every `.md` file in the configured directories. Each file is added to `prompts/list` and can be read with `prompts/get`.
+
+Markdown file format:
+
+```md
+---
+name: code_review
+description: Review code and find correctness issues.
+---
+Review the following code for bugs, regressions, and missing tests.
+```
+
+The Markdown body is returned as a MCP prompt message:
+
+```json
+{
+  "role": "user",
+  "content": {
+    "type": "text",
+    "text": "Review the following code for bugs, regressions, and missing tests."
+  }
+}
+```
+
+Frontmatter fields:
+
+| Field | Required | Behavior |
+| --- | --- | --- |
+| `name` | No | Used as the MCP prompt name. If omitted, allino uses the filename without `.md`. |
+| `description` | No | Returned by `prompts/list` and `prompts/get`. |
+
+If a mounted Markdown prompt has the same name as a Function prompt, the Function prompt takes precedence.

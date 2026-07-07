@@ -18,6 +18,7 @@ Available Commands:
   keygen       Generate secrets.config.json file
   openapi      Generate OpenAPI YAML
   route        Print registered routes
+  mcp          Print MCP endpoint and exposed items
   serve        Start the web server
   version      Print version info
 
@@ -82,4 +83,30 @@ Shutting down server...
 1.75470134210884e+09    info    server shutting down
 Server gracefully stopped
 1.754701342109249e+09   info    server shutdown complete
+```
+
+## MCP command
+
+```sh
+❯ go run main.go mcp
+MCP Endpoint:
+  POST /mcp
+Metadata Endpoint:
+  GET /mcp
+Protocol:
+  2024-11-05
+Transport:
+  streamable-http
+Enabled:
+  true
+
+## Tools
+- echo  # Echoes a message.
+  Args: message=string
+
+## Prompts
+- code_review  # Review code and find correctness issues.
+
+## Resources
+(none)
 ```

@@ -448,6 +448,7 @@ This makes it easy to incrementally migrate your existing API server to allino, 
 
 Set `Option.MCP` to `"tool"` and give the function a stable `Name`.
 When the server starts, allino registers `POST /mcp` and exposes the function through MCP `tools/list` and `tools/call`.
+Run `go run main.go mcp` to inspect the MCP endpoint settings and exposed tools/prompts/resources.
 
 ```go
 type EchoToolInput struct {
@@ -479,6 +480,15 @@ $ curl -s http://localhost:8000/mcp \
 ```
 
 `MCP: "resource"` and `MCP: "prompt"` are also supported.
+You can also mount Markdown prompt files:
+
+```yaml
+mcp:
+  promptDirs:
+    - ./prompts
+```
+
+Each `.md` file body is returned as a prompt message. Optional YAML frontmatter can set `name` and `description`; without `name`, allino uses the filename without `.md`.
 See [MCP docs](./docs/MCP.md) for details.
 
 ---
