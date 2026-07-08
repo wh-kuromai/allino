@@ -205,6 +205,10 @@ mcp:
   endpoint: "/mcp"
   promptDirs:
     - ./prompts
+  resourceDirs:
+    - ./resources
+  resourceScheme: allino
+  resourceHost: resource
 ```
 
 See [MCP.md](./MCP.md) for the MCP endpoint and function exposure behavior.
@@ -333,4 +337,3 @@ fiber:
 ```
 
 Use Fiber's config field names when setting this section.
-

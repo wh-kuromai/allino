@@ -1,15 +1,19 @@
 package allino
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/goccy/go-yaml"
 	"github.com/gofiber/fiber/v2"
@@ -18,12 +22,25 @@ import (
 )
 
 const defaultMCPEndpoint = "/mcp"
+const defaultMCPResourceScheme = "allino"
+const defaultMCPResourceHost = "resource"
 
 var mcpRegisteredServers sync.Map
 
 type MCPConfig struct {
-	Endpoint   string   `json:"endpoint"`
-	PromptDirs []string `json:"promptDirs"`
+	Endpoint       string   `json:"endpoint"`
+	PromptDirs     []string `json:"promptDirs"`
+	ResourceDirs   []string `json:"resourceDirs"`
+	ResourceScheme string   `json:"resourceScheme"`
+	ResourceHost   string   `json:"resourceHost"`
+}
+
+type mcpLocalResource struct {
+	URI         string
+	Name        string
+	Description string
+	MIMEType    string
+	Path        string
 }
 
 type mcpMarkdownPrompt struct {
@@ -42,7 +59,8 @@ var MCPExtension = NewExtension[MCPConfig, any](
 	"mcp",
 	&ExtOption{
 		OnInit: func(s *Server, virtual *Runtime) error {
-			if len(mcpConfig().PromptDirs) == 0 {
+			config := mcpConfig()
+			if len(config.PromptDirs) == 0 && len(config.ResourceDirs) == 0 {
 				return nil
 			}
 			registerMCPHandlers(s)
@@ -95,6 +113,30 @@ func mcpEndpoint() string {
 		endpoint = "/" + endpoint
 	}
 	return endpoint
+}
+
+func mcpResourceScheme() string {
+	scheme := strings.TrimSpace(mcpConfig().ResourceScheme)
+	if scheme == "" {
+		return defaultMCPResourceScheme
+	}
+	return scheme
+}
+
+func mcpResourceHost() string {
+	host := strings.TrimSpace(mcpConfig().ResourceHost)
+	if host == "" {
+		return defaultMCPResourceHost
+	}
+	return host
+}
+
+func mcpLocalResourceURI(rel string) string {
+	return (&url.URL{
+		Scheme: mcpResourceScheme(),
+		Host:   mcpResourceHost(),
+		Path:   "/" + rel,
+	}).String()
 }
 
 type mcpJSONRPCRequest struct {
@@ -339,15 +381,37 @@ func mcpToolCall(s *Server, r *Runtime, params json.RawMessage) (any, error) {
 
 func mcpResourcesList(s *Server) (any, error) {
 	resources := []map[string]any{}
+	seen := map[string]bool{}
 	for _, opt := range mcpOptions(s, "resource") {
 		name := mcpFunctionName(opt)
+		uri := "allino://" + name
+		seen[uri] = true
 		resources = append(resources, map[string]any{
-			"uri":         "allino://" + name,
+			"uri":         uri,
 			"name":        name,
 			"description": opt.Description,
 			"mimeType":    opt.ContentType,
 		})
 	}
+	localResources, err := mcpLoadLocalResources(s)
+	if err != nil {
+		return nil, err
+	}
+	for _, resource := range localResources {
+		if seen[resource.URI] {
+			continue
+		}
+		seen[resource.URI] = true
+		resources = append(resources, map[string]any{
+			"uri":         resource.URI,
+			"name":        resource.Name,
+			"description": resource.Description,
+			"mimeType":    resource.MIMEType,
+		})
+	}
+	sort.Slice(resources, func(i, j int) bool {
+		return fmt.Sprint(resources[i]["uri"]) < fmt.Sprint(resources[j]["uri"])
+	})
 	return map[string]any{"resources": resources}, nil
 }
 
@@ -362,29 +426,47 @@ func mcpResourceRead(s *Server, r *Runtime, params json.RawMessage) (any, error)
 	}
 	name := strings.TrimPrefix(p.URI, "allino://")
 	opt := findMCPOption(s, "resource", name)
-	if opt == nil {
+	if opt != nil {
+		mcpLogInfo(r, "mcp resource started", "resource", name)
+		output, err := callMCPFunction(s, r, opt, p.Arguments)
+		if err != nil {
+			mcpLogError(r, "resource", name, "call", err)
+			return nil, err
+		}
+		text, err := marshalMCPText(output)
+		if err != nil {
+			mcpLogError(r, "resource", name, "marshal", err)
+			return nil, err
+		}
+		mcpLogInfo(r, "mcp resource completed", "resource", name)
+		return map[string]any{
+			"contents": []map[string]any{{
+				"uri":      p.URI,
+				"mimeType": opt.ContentType,
+				"text":     text,
+			}},
+		}, nil
+	}
+
+	resource, err := mcpFindLocalResource(s, p.URI)
+	if err != nil {
+		mcpLogError(r, "resource", p.URI, "local_lookup", err)
+		return nil, err
+	}
+	if resource == nil {
 		err := fmt.Errorf("MCP resource not found: %s", p.URI)
 		mcpLogError(r, "resource", name, "lookup", err)
 		return nil, err
 	}
-	mcpLogInfo(r, "mcp resource started", "resource", name)
-	output, err := callMCPFunction(s, r, opt, p.Arguments)
+	mcpLogInfo(r, "mcp resource started", "resource", resource.Name)
+	content, err := mcpReadLocalResource(*resource)
 	if err != nil {
-		mcpLogError(r, "resource", name, "call", err)
+		mcpLogError(r, "resource", resource.Name, "read", err)
 		return nil, err
 	}
-	text, err := marshalMCPText(output)
-	if err != nil {
-		mcpLogError(r, "resource", name, "marshal", err)
-		return nil, err
-	}
-	mcpLogInfo(r, "mcp resource completed", "resource", name)
+	mcpLogInfo(r, "mcp resource completed", "resource", resource.Name)
 	return map[string]any{
-		"contents": []map[string]any{{
-			"uri":      p.URI,
-			"mimeType": opt.ContentType,
-			"text":     text,
-		}},
+		"contents": []map[string]any{content},
 	}, nil
 }
 
@@ -570,6 +652,76 @@ func marshalMCPText(v any) (string, error) {
 		}
 		return string(buf), nil
 	}
+}
+
+func mcpLoadLocalResources(s *Server) ([]mcpLocalResource, error) {
+	resources := []mcpLocalResource{}
+	for _, dir := range mcpConfig().ResourceDirs {
+		root := mcpResolvePath(s, dir)
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(rel)
+			mimeType := mime.TypeByExtension(filepath.Ext(path))
+			if mimeType == "" {
+				mimeType = "application/octet-stream"
+			}
+			uri := mcpLocalResourceURI(rel)
+			resources = append(resources, mcpLocalResource{
+				URI:         uri,
+				Name:        rel,
+				Description: "Local file: " + rel,
+				MIMEType:    mimeType,
+				Path:        path,
+			})
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Slice(resources, func(i, j int) bool {
+		return resources[i].URI < resources[j].URI
+	})
+	return resources, nil
+}
+
+func mcpFindLocalResource(s *Server, uri string) (*mcpLocalResource, error) {
+	resources, err := mcpLoadLocalResources(s)
+	if err != nil {
+		return nil, err
+	}
+	for _, resource := range resources {
+		if resource.URI == uri {
+			return &resource, nil
+		}
+	}
+	return nil, nil
+}
+
+func mcpReadLocalResource(resource mcpLocalResource) (map[string]any, error) {
+	buf, err := os.ReadFile(resource.Path)
+	if err != nil {
+		return nil, err
+	}
+	content := map[string]any{
+		"uri":      resource.URI,
+		"mimeType": resource.MIMEType,
+	}
+	if utf8.Valid(buf) {
+		content["text"] = string(buf)
+	} else {
+		content["blob"] = base64.StdEncoding.EncodeToString(buf)
+	}
+	return content, nil
 }
 
 func mcpLoadMarkdownPrompts(s *Server) ([]mcpMarkdownPrompt, error) {

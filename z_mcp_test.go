@@ -69,6 +69,7 @@ func TestMCPToolsCall(t *testing.T) {
 
 func TestMCPMarkdownPrompts(t *testing.T) {
 	dir := t.TempDir()
+	resourceDir := t.TempDir()
 	err := os.WriteFile(filepath.Join(dir, "with-frontmatter.md"), []byte(`---
 name: mounted_prompt
 description: Mounted prompt description.
@@ -82,9 +83,13 @@ Use the mounted prompt body.
 	if err != nil {
 		t.Fatalf("failed to write prompt: %v", err)
 	}
+	err = os.WriteFile(filepath.Join(resourceDir, "note.txt"), []byte("local resource body"), 0600)
+	if err != nil {
+		t.Fatalf("failed to write resource: %v", err)
+	}
 
 	server := allino.NewTestServer(&allino.Config{
-		ConfigBytes: []byte("mcp:\n  endpoint: /mounted_mcp\n  promptDirs:\n    - " + dir + "\n"),
+		ConfigBytes: []byte("mcp:\n  endpoint: /mounted_mcp\n  resourceScheme: app\n  resourceHost: file\n  promptDirs:\n    - " + dir + "\n  resourceDirs:\n    - " + resourceDir + "\n"),
 		Debug:       true,
 		SQL: allino.SQLConfig{
 			Driver: "sqlite",
@@ -136,5 +141,31 @@ Use the mounted prompt body.
 	content := messages[0].(map[string]any)["content"].(map[string]any)
 	if content["text"] != "Use the mounted prompt body." {
 		t.Fatalf("unexpected prompt body: %#v", content)
+	}
+
+	resourceListOut := post(`{"jsonrpc":"2.0","id":3,"method":"resources/list"}`)
+	resources := resourceListOut["result"].(map[string]any)["resources"].([]any)
+	var resourceURI string
+	for _, raw := range resources {
+		resource := raw.(map[string]any)
+		if resource["name"] == "note.txt" {
+			resourceURI = resource["uri"].(string)
+			if resourceURI != "app://file/note.txt" {
+				t.Fatalf("unexpected resource uri: %#v", resource)
+			}
+			if resource["mimeType"] != "text/plain; charset=utf-8" {
+				t.Fatalf("unexpected resource mime type: %#v", resource)
+			}
+		}
+	}
+	if resourceURI == "" {
+		t.Fatalf("expected mounted resource in list, got %#v", resources)
+	}
+
+	resourceReadOut := post(`{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"` + resourceURI + `"}}`)
+	contents := resourceReadOut["result"].(map[string]any)["contents"].([]any)
+	resourceContent := contents[0].(map[string]any)
+	if resourceContent["text"] != "local resource body" {
+		t.Fatalf("unexpected resource body: %#v", resourceContent)
 	}
 }

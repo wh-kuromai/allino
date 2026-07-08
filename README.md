@@ -3,39 +3,47 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/wh-kuromai/allino)](https://goreportcard.com/report/github.com/wh-kuromai/allino)
 [![Go Reference](https://pkg.go.dev/badge/github.com/wh-kuromai/allino.svg)](https://pkg.go.dev/github.com/wh-kuromai/allino)
 
+**Typed function runtime for Go backends.**
 
-**AI-first web framework for Go**  
-Let your AI generate your apps using best-practice OSS – automatically.
+allino turns ordinary Go functions with typed input and output into HTTP APIs,
+OpenAPI definitions, MCP tools/resources/prompts, CLI-visible handlers, cached
+executions, background jobs, and authenticated application endpoints.
 
----
+The core idea is small:
 
-## ✨ Features
-
-- **AI-Ready API Definition**: Handler signatures, validation, logging, database access, and authentication are all pre-wired for AI code generation
-- **[AI-optimized prompt template](#ai-prompt-template-works-well-with-chatgpt)** for instant code generation
-- **Strongly-typed API definition** using Go generics
-- **Automatic input validation** via `go-playground/validator`
-- **Built-in Authentication & Authorization support** with native CSRF protection
-- **Auto-generated OpenAPI docs** for your API
-- **MCP endpoint generation** for exposing typed Functions as tools/resources/prompts
-- **Popular OSS integrations via a [single JSON config](./docs/CONFIG.md)**: `fiber`, `go-redis`, `sql`, and more
-- **Logging** : Apache Combined access-log, structured error logging with `zap`, log rotation via `lumberjack` and `cron`
-- **Test code generation** with **[this prompt](./docs/TEST.md#ai-prompt-template-for-test-works-well-with-chatgpt)**
-- **Single Page Application (SPA) Support** : Seamlessly serve `react`, `vue`, `svelte` or any static website.
-- **Legacy-friendly**: Drop-in support for existing http.Handler code
-- **Out-of-the-box CLI** with beautiful help and route listing
----
-
-## 🚀 Getting Started
-
-Getting started takes just a few steps:
-
-```bash
-$ go get github.com/wh-kuromai/allino@latest
+```go
+func(r *allino.Runtime, input Input) (*Output, error)
 ```
 
-First, install the package.  
-Then, your entry point can be as simple as:
+Write the function once. Let allino provide the runtime surface around it.
+
+---
+
+## Why allino?
+
+Most Go web frameworks start from routes and middleware. allino starts from a
+typed function.
+
+That single function can be:
+
+- exposed as an HTTP API with validation and JSON/HTML response handling
+- documented as OpenAPI from its Go input/output types
+- exposed as an MCP tool, resource, or prompt
+- executed through CLI/job infrastructure by handler name
+- cached, deduplicated, dispatched, replayed, or resumed
+- given access to shared runtime services such as logging, Redis, SQL, S3, AI
+  clients, sessions, authentication, and request IDs
+
+This makes allino useful for backend code that has to be called in several ways:
+from browsers, scripts, LLM agents, job workers, tests, and internal Go code.
+
+## Install
+
+```bash
+go get github.com/wh-kuromai/allino@latest
+```
+
+Your entry point can stay small:
 
 ```go
 package main
@@ -50,130 +58,195 @@ func main() {
 }
 ```
 
-You might be thinking:
+Functions are registered by importing packages that define them. Manual
+registration is also supported when you want explicit control.
 
-> “But wait — don’t I need a giant config file or to manually register all my handlers?”
-
-Nope — not at all.
-allino automatically registers all handlers declared in imported packages, so you don’t need to do any explicit registration unless you want to.
-If you prefer to register handlers manually, that’s also fully supported.
-
----
-
-Let’s try creating a simple API:
+## A typed HTTP API
 
 ```go
-// AI-friendly type definition
-type HealthcheckAPIInput struct {
+package handlers
+
+import (
+	"time"
+
+	"github.com/wh-kuromai/allino"
+)
+
+type HealthcheckInput struct {
 	Echo string `query:"echo"`
 }
-type HealthcheckAPIOutput struct {
+
+type HealthcheckOutput struct {
 	Status  string    `json:"status"`
 	Echo    string    `json:"echo,omitempty"`
 	StartAt time.Time `json:"startAt"`
 }
 
-var HealthcheckAPIFunction = allino.NewTypedAPI("/api/healthcheck",
-    func(r *allino.Runtime, param *HealthcheckAPIInput) (*HealthcheckAPIOutput, error) {
-        // Actual API logic here.
-		return &HealthcheckAPIOutput{
+var Healthcheck = allino.NewFunction(
+	allino.Option{
+		Path:        "/api/healthcheck",
+		Method:      "GET",
+		ContentType: allino.JSON,
+		Summary:     "Health check",
+		Description: "Returns server status and echoes an optional query value.",
+	},
+	func(r *allino.Runtime, input HealthcheckInput) (*HealthcheckOutput, error) {
+		return &HealthcheckOutput{
 			Status:  "OK",
-			Echo:    param.Echo,
+			Echo:    input.Echo,
 			StartAt: r.Config.StartAt,
 		}, nil
-	})
+	},
+)
 ```
 
-It might look a little unfamiliar at first, but it’s built on top of a simple generic helper function:
+allino parses path/query/form/header/cookie/JWT values into the input struct,
+applies `go-playground/validator` validation, calls the function, and writes the
+typed output as the response.
+
+## CLI and docs from the same functions
+
+Every allino app ships with a CLI.
+
+```bash
+go run main.go
+go run main.go route
+go run main.go openapi
+go run main.go mcp
+go run main.go serve
+```
+
+The CLI can list routes, generate OpenAPI, inspect MCP exposure, encrypt config,
+generate keys, and start the server. See [CLI docs](./docs/CLI.md) for examples.
+
+## MCP from typed Go functions
+
+Set `Option.MCP` and allino exposes the function through a streamable HTTP MCP
+endpoint.
 
 ```go
-func NewTypedAPI[T, U any, E error](path string, handlefunc func(r *Runtime, input T) (output U, err E)) Function
+type EchoToolInput struct {
+	Message string `json:"message" validate:"required"`
+}
+
+type EchoToolOutput struct {
+	Echo string `json:"echo"`
+}
+
+var EchoTool = allino.NewFunction(
+	allino.Option{
+		Name:        "echo",
+		Description: "Echoes a message.",
+		ContentType: allino.JSON,
+		MCP:         "tool",
+	},
+	func(r *allino.Runtime, input *EchoToolInput) (*EchoToolOutput, error) {
+		return &EchoToolOutput{Echo: input.Message}, nil
+	},
+)
 ```
 
-You can use any Go types for input and output.
-The framework automatically parses path/query/form parameters into your struct, validates them using go-playground/validator
-, and passes the fully-populated struct into your handler.
+The same type metadata used for OpenAPI is used for MCP input/output schemas.
+`MCP: "resource"` and `MCP: "prompt"` are also supported, and Markdown prompt
+directories can be mounted from config. See [MCP docs](./docs/MCP.md).
 
-The allino.Runtime includes fiber.Ctx, a zap.Logger, and a redis.Client — everything you need to start building real-world logic right away.
+## Cached and resumable function execution
+
+allino's job system is best understood as execution modes for typed functions.
+It is useful when a function calls an AI model, external API, browser automation,
+batch process, or any expensive operation that should be cached, deduplicated, or
+resumed later.
+
+```go
+var ExpensiveLookup = allino.NewFunction(
+	allino.Option{
+		Name:        "expensive-lookup",
+		Version:     "1.0.0",
+		Path:        "/api/lookup",
+		Method:      "GET",
+		ContentType: allino.JSON,
+		JobMode:     "cache",
+	},
+	func(r *allino.Runtime, input LookupInput) (*LookupOutput, error) {
+		// Call an LLM, external API, crawler, or long-running computation.
+		return lookup(r, input)
+	},
+)
+```
+
+Supported modes include:
+
+- `cache`: store and reuse results by handler name, version, and input
+- `dedupe`: prevent concurrent duplicate work for the same input
+- `once`: run once per unique input
+- `memoized`: wait for the first execution and reuse its result
+- `async` / `dispatch`: enqueue work and resume later
+- `fanout` / `replay` / `replayall`: Redis stream based broadcast/replay modes
+
+These modes make allino especially handy for AI calls, external API aggregation,
+large batch registration, resumable workflows, and state restoration.
+
+## Authentication, sessions, and runtime services
+
+allino includes application plumbing that is easy to forget until you need it:
+
+- login cookies, access tokens, CSRF tokens, guest sessions, and JWT claims
+- `Runtime.User()` with read/write intent checks
+- Redis, SQL, S3, HTTP client, logger, request ID, and context access
+- sticky sessions for stateful or non-serializable runtime objects
+- config loading from YAML/JSON/encrypted files
+- structured logging, access logs, rotation, and cron-based rotation
+- extension hooks for startup, shutdown, authz, injection, SQL schema, and CLI
+
+See [CONFIG](./docs/CONFIG.md), [EXTENSION](./docs/EXTENSION.md), and
+[TEST](./docs/TEST.md) for the detailed behavior.
+
+## AI-friendly, but not AI-only
+
+allino was originally designed so AI could generate Go backend code without
+re-inventing Redis clients, loggers, validation, authentication, and response
+formats inside every handler.
+
+That is still useful. But the more general value is that allino gives both humans
+and AI a compact, typed target:
+
+```go
+input struct -> function -> output struct
+```
+
+That shape is easy to test, document, expose to agents, cache, run in workers,
+and evolve over time.
+
+## Documentation
+
+- [CLI](./docs/CLI.md)
+- [MCP](./docs/MCP.md)
+- [Configuration](./docs/CONFIG.md)
+- [Extensions](./docs/EXTENSION.md)
+- [Testing](./docs/TEST.md)
+- [Old README](./docs/OLD_README.md)
 
 ---
 
-Once your first API is ready, let’s boot the server.
-
-```bash
-$ go run main.go
-NAME:
-   allino - AI-first web framework server
-...
-```
-
-You’ll see a help message like this.
-Now, before actually running the server, let’s try something magical:
-
-```bash
-$ go run main.go gendoc routes
-GET /api/healthcheck 
-```
-
-That’s right — all registered routes are automatically listed along with their metadata.
-And if you want full documentation? Just run:
-
-```bash
-$ go run main.go gendoc openapi
-```
-
-See [CLI Output Samples](./docs/CLI.md) for full examples.
-
-You may be surprised by the accuracy and completeness.
-Finally, let’s start the server for real:
-
-```bash
-$ go run main.go serve
-```
-
-You're now running your first allino server!
-
-### 🧠 Can AI generate code for a new framework like this?
-
-Yes — that's exactly what allino is designed for.
-
-You can use our compact, **AI-optimized prompt template** to describe your desired API,
-and get fully working code instantly, powered by many powerful OSS tools like `fiber`, `zap`, `go-redis`, `go-playground/validator` and more.
-
-This means you don't need to explain the whole framework — just paste your API idea along with the prompt, and AI can take it from there.
-
----
-## 📋 AI Result
-
-Examples of AI-generated results using **[this prepared AI Prompt Template](#ai-prompt-template-works-well-with-chatgpt)**.
-
-| Description | Type | AI | Result | 
-| --- | --- | --- | --- |
-| Create simple QR code API | api, binary | ChatGPT-4o | ✅[Result](./docs/result/qrcode.md) |
-| Create simple short URL API | api, redis, path-param, redirect | ChatGPT-4o | ✅[Result](./docs/result/shorturl.md) |
-| Create simple ID Registration and ID/Password login API | 2-apis, redis, sql, login, cookie | ChatGPT-4o | ✅[1](./docs/result/idpw_login.md), ✅[2](./docs/result/idpw_login.md) |
-
-... and [more results.](./RESULT.md)
-
----
-## AI Prompt Template (works well with ChatGPT)
+## AI Prompt Template
 
 You can paste the following after your API idea, and get working `allino` code instantly:
 
 ```go
-// allino AI-first web-framework
-//   allino is an AI-first web framework that leverages Go generics to define clear, type-safe input/output structures.
-//   It enables automatic validation, human-readable handler signatures, and auto-generation of OpenAPI documentation.
-//   By integrating popular OSS such as `fiber`, `redis`, `zap`, and `go-playground/validator`,
-//   it improves compatibility with AI-generated code, making it easier for LLMs to produce reliable implementations.
-//   Use this framework to implement the API requested by the user.
-// Input: 
-//   - Fields are populated in order: path parameters → query parameters → form values. 
+// allino typed function runtime for Go backends
+//   allino turns typed Go functions into HTTP APIs, OpenAPI definitions, MCP tools/resources/prompts,
+//   CLI-visible handlers, cached executions, background jobs, and authenticated application endpoints.
+//   The core design is input struct -> function -> output struct.
+//   It uses Go generics and reflection metadata so validation, schema generation, job input/output,
+//   MCP schemas, and tests can share the same function definition.
+//   Use this framework to implement the API or tool requested by the user.
+// Input:
+//   - Fields are populated in order: path parameters → query parameters → form values.
 //   - Validated using go-playground/Validator. Then passed to the handler function.
 //   - Field types can be string, []byte, int, *multipart.FileHeader, or other primitive types.
 //   - If no input is needed, use `any` as the input type to indicate that no data is required.
 // Output:
-//   JSON: 
+//   JSON:
 //     - Return a struct or a pointer to a struct. Automatically wrapped as {"data":{...}}, marshaled via json.Marshal, and written to response.
 //     - Avoid using `any` as the return type in JSON APIs, as it prevents OpenAPI schema generation.
 //   HTML:
@@ -206,9 +279,9 @@ func (r *Runtime) SQL() *sql.DB // pre-Opened sql Client, inited via config.
 func (r *Runtime) S3() *s3.Client // AWS SDK v2 S3 client, inited via config. (MinIO/AWS)
 func (r *Runtime) HttpClient() *http.Client // inited shared http client.
 // User() checks and validates using Cookie, Authorization header, X-CSRF-Token header or `csrf_token` form data.
-// Returns uid (database key), display name, and sets writable=true only when a write-intent credential is presented 
-// (e.g., Authorization header or an explicit token in form/query/header) and CSRF validation succeeds. 
-// Otherwise the user is treated as read-only. 
+// Returns uid (database key), display name, and sets writable=true only when a write-intent credential is presented
+// (e.g., Authorization header or an explicit token in form/query/header) and CSRF validation succeeds.
+// Otherwise the user is treated as read-only.
 func (r *Runtime) User() (uid, displayname string, writable bool, err error)
 // RequestID() returns unique generated xid, X-Request-ID header if config.trustedproxy.trustXRequestID is true,
 // async/dispatch JobID, or fanout/replay/replayall redis stream MessageID.
@@ -264,12 +337,12 @@ type Option struct {
 
   // Cron expression to schedule this handler.
   // custom `?` specifier for random number, `N-M?` for random number between N and M.
-  Cron string 
+  Cron string
 
   // JobMode defines the execution behavior of this handler.
   // Note: Certain modes require the handler to be idempotent. Allino caches/stores
   // results using a key: Name + Version + hash(input).
-  // 
+  //
   //   "" (Default) : Standard synchronous execution.
   //   "cache"      : Caches the result based on input JSON; returns the cached result if available.
   //   "dedupe"     : Ensures only one execution runs concurrently for the same input; returns allino.ErrJobDuplicated if dupulicated. (Requires idempotency)
@@ -286,7 +359,7 @@ type Option struct {
   //   "replayall" : replay all jobs every restart. (for in-memory state)
   JobMode string
   Job JobOption
-  
+
   // Session configures request-scoped shared state.
   Session allino.Session
 }
@@ -301,9 +374,9 @@ type JobOption struct {
 
   // OnReplayInit returns the stream position to start replaying after. optional.
   // replayAfter MessageID can be retrieved by r.RequestID()
-	OnReplayInit func() (replayAfter string, err error) 
-  // ReplayTTL automatically removes expired jobs/events from the stream. optional. 
-	ReplayTTL    time.Duration 
+	OnReplayInit func() (replayAfter string, err error)
+  // ReplayTTL automatically removes expired jobs/events from the stream. optional.
+	ReplayTTL    time.Duration
 }
 
 type IdempotentRequest interface {
@@ -346,8 +419,8 @@ func (r *Runtime) MarkRequeueAt(waitsec int) // aborts the execution, and schedu
 // The in-memory radix tree and map are safely restored during server initialization.
 // A scope can be revoked either by exact string match or by prefix match using a trailing wildcard (e.g. "some:string:*").
 // TTLs for exact and prefix revocations can be configured via server config.
-func (r *Runtime) Revoke(scope string, reason string) 
-func (r *Runtime) IsRevoked(scope string, issuedAt time.Time) (revoked bool, reason string) 
+func (r *Runtime) Revoke(scope string, reason string)
+func (r *Runtime) IsRevoked(scope string, issuedAt time.Time) (revoked bool, reason string)
 
 func GetClassHandlers(class string) []Function
 
@@ -361,14 +434,14 @@ type SampleAPIInput struct {
   Version string `query:"ver" default:"v1"`   // Default values (applied before binding; empty input overwrites)
   // Body SampleAPIInputJSONBody `post:"json"` // Automatically binds JSON body to this field. (json.Unmarshal(body, &param.Body))
   // CLIFilePath string `cli:"path"` // CLI variables (yourapp run YourHandler --set path=abc.txt)
-  
+
   // `inject` tag will make this handler works like class method.
-  //  extensions are responsible for 
+  //  extensions are responsible for
   //    caller send instanceid as query/form/path input string
-  //    -> send to extension 
+  //    -> send to extension
   //    -> extension retreive data, check ACL, then return data.
   //    -> unmarshal into this param.
-  // Instance SampleClass `query:"instanceid" inject:"extensionName:action"` 
+  // Instance SampleClass `query:"instanceid" inject:"extensionName:action"`
 }
 type SampleAPIOutput struct {
 	Echo    string    `json:"echo,omitempty"`
@@ -385,177 +458,3 @@ var SampleAPIFunction = allino.NewFunction(
 		}, nil
 	})
 ```
-
-## FAQ
-
-### 💡 Do I have to migrate my existing code?
-
-No, you can also use `http.Handler` as it is.
-
-allino lets you incrementally adopt the framework — Even legacy `http.Handler` implementations are fully supported.
-
-```go
-func yourHandler(w http.ResponseWriter, r *http.Request) {
-    ...
-}
-
-func main() {
-    allino.RunCLI(&allino.Config{
-        OnInit: func(server *allino.Server) {
-            
-            // register your legacy api handler
-            server.HandleFunc("GET", "/api/legacy", yourHandler)
-
-        }
-    })
-}
-```
-
-Or, if you want to integrate your legacy handler into `gendoc` and OpenAPI generation:
-
-```go
-func yourHandler(w http.ResponseWriter, r *http.Request) {
-    ...
-}
-
-func main() {
-    allino.RunCLI(&allino.Config{
-        OnInit: func(server *allino.Server) {
-            
-            server.TypedHandleFunc(allino.Option{
-                Path:        "/api/legacy",
-                Method:      "GET",
-                ContentType: allino.JSON,
-
-                // Hints are used for generating OpenAPI Response schemas.
-                // InputTypeHint : &YourInputType{},
-                // OutputTypeHint: &YourOutputType{}, 
-                // ErrorTypeHint : &YourErrorType{},
-
-                // Uncomment this, if your API is not wrapped with {"data":{...}} or {"error":{msg:"..."}}
-                // NoWrapJSON : true, 
-            }, yourHandler)
-
-        }
-    })
-}
-```
-
-This makes it easy to incrementally migrate your existing API server to allino, without needing to rewrite everything from scratch.
-
----
-### 🔌 Want to expose a Function as an MCP tool?
-
-Set `Option.MCP` to `"tool"` and give the function a stable `Name`.
-When the server starts, allino registers `POST /mcp` and exposes the function through MCP `tools/list` and `tools/call`.
-The endpoint defaults to `/mcp`; set `mcp.endpoint` in config to change it.
-Run `go run main.go mcp` to inspect the MCP endpoint settings and exposed tools/prompts/resources.
-
-```go
-type EchoToolInput struct {
-	Message string `json:"message" validate:"required"`
-}
-
-type EchoToolOutput struct {
-	Echo string `json:"echo"`
-}
-
-var EchoToolFunction = allino.NewFunction(
-	allino.Option{
-		Name:        "echo",
-		Description: "Echoes a message.",
-		ContentType: allino.JSON,
-		MCP:         "tool",
-	},
-	func(r *allino.Runtime, input *EchoToolInput) (*EchoToolOutput, error) {
-		return &EchoToolOutput{Echo: input.Message}, nil
-	},
-)
-```
-
-```bash
-$ go run main.go serve
-$ curl -s http://localhost:8000/mcp \
-    -H 'Content-Type: application/json' \
-    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"message":"hello"}}}'
-```
-
-`MCP: "resource"` and `MCP: "prompt"` are also supported.
-You can also mount Markdown prompt files:
-
-```yaml
-mcp:
-  endpoint: /mcp
-  promptDirs:
-    - ./prompts
-```
-
-Each `.md` file body is returned as a prompt message. Optional YAML frontmatter can set `name` and `description`; without `name`, allino uses the filename without `.md`.
-See [MCP docs](./docs/MCP.md) for details.
-
----
-### 🧪 Want to generate even more perfect OpenAPI docs?
-
-Previously, we used `allino.NewTypedAPI`, but if you switch to `allino.NewFunction`, you can configure various options like:
-
-- Add `Summary` and `Description` to the OpenAPI docs
-- Enable CORS: Send `Access-Control-Allow-Origin: *` for OPTIONS requests
-- Disable JSON wrapping: Prevent output from being wrapped in `{"data":{...}}` or `{"error":{...}}`
-
-```go
-var HealthcheckAPIFunction = allino.NewFunction(
-	allino.Option{
-		Summary:     "Simple health check API",
-		Path:        "/api/healthcheck",
-		Method:      "GET",
-		ContentType: allino.JSON,
-	},
-	func(r *allino.Runtime, param *HealthcheckAPIInput) (*HealthcheckAPIOutput, error) {
-		return &HealthcheckAPIOutput{
-			Status:  "OK",
-			Echo:    param.Echo,
-			StartAt: r.Config.StartAt,
-		}, nil
-	})
-```
-
----
-
-## 📊 Benchmark
-
-| Software | githubAPI | | gplusAPI | | parseAPI | |
-|----------|-----------------|--------|-----------------|--------|-----------------|--------|
-| fiber    | 101,496 req/sec | 1.06ms | 112,741 req/sec | 0.96ms | 108,303 req/sec | 0.99ms |
-| allino (fiber +validation,etc)   |  86,738 req/sec | 1.30ms |  94,450 req/sec | 1.22ms |  95,382 req/sec | 1.18ms |
-| echo     |  84,966 req/sec | 1.33ms |  80,391 req/sec | 1.42ms |  79,833 req/sec | 1.44ms |
-| gin      |  84,373 req/sec | 1.37ms |  83,669 req/sec | 1.36ms |  83,033 req/sec | 1.45ms |
-
-use test-data from https://github.com/vishr/web-framework-benchmark
-
----
-
-## 💡 Inspiration
-
-I created this framework with questions like:
-
-- How can we get AI to write code that uses fiber, zap, and go-redis properly?
-- How should input/output be described for AI?
-- How can we keep the generated code compact?
-- How do we describe previously generated code to AI?
-
-Most existing frameworks prioritize human readability and flexibility. But for AI, that often makes it unclear which tools are allowed. For example, when AI needs to use `go-redis`, it might start by opening a database connection inside the handler. If you say “use `zap`”, the AI might begin by writing `zap` initialization code. And when it needs a user ID, it may generate a fake placeholder instead of using proper authentication.
-
-allino solves this by encoding those expectations into the framework itself.
-
-Once you've built a few APIs, try running 
-
-```bash
-$ go run main.go gendoc openapi
-```
-
-and giving the result to an AI — it will likely respond:
-
-“This is great! Maybe we can also add an endpoint like X?”
-
-That’s when things get really fun. ✨
-And the best part? The AI will thank *you* for making its life easier.

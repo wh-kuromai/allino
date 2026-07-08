@@ -105,7 +105,8 @@ func printMCP(s *Server) {
 	enabled := len(mcpOptions(s, "tool")) > 0 ||
 		len(mcpOptions(s, "resource")) > 0 ||
 		len(mcpOptions(s, "prompt")) > 0 ||
-		len(config.PromptDirs) > 0
+		len(config.PromptDirs) > 0 ||
+		len(config.ResourceDirs) > 0
 
 	fmt.Print("MCP Endpoint:\n")
 	fmt.Printf("  POST %s\n", endpoint)
@@ -115,11 +116,19 @@ func printMCP(s *Server) {
 	fmt.Print("  2024-11-05\n")
 	fmt.Print("Transport:\n")
 	fmt.Print("  streamable-http\n")
+	fmt.Print("Resource URI:\n")
+	fmt.Printf("  %s://%s/<relative-path>\n", mcpResourceScheme(), mcpResourceHost())
 	fmt.Printf("Enabled:\n  %t\n", enabled)
 
 	if len(config.PromptDirs) > 0 {
 		fmt.Print("Prompt Dirs:\n")
 		for _, dir := range config.PromptDirs {
+			fmt.Printf("  - %s\n", mcpResolvePath(s, dir))
+		}
+	}
+	if len(config.ResourceDirs) > 0 {
+		fmt.Print("Resource Dirs:\n")
+		for _, dir := range config.ResourceDirs {
 			fmt.Printf("  - %s\n", mcpResolvePath(s, dir))
 		}
 	}

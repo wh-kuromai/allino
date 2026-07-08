@@ -147,6 +147,41 @@ Example request:
 }
 ```
 
+## Mounted Local Resources
+
+You can also mount local directories as MCP resources.
+
+```yaml
+mcp:
+  resourceScheme: allino
+  resourceHost: resource
+  resourceDirs:
+    - ./resources
+```
+
+allino recursively scans every file in the configured directories and exposes each file from `resources/list`.
+
+Mounted file resource URIs use this form:
+
+```text
+allino://resource/<relative-path>
+```
+
+The `allino` scheme and `resource` host can be changed with `mcp.resourceScheme` and `mcp.resourceHost`.
+
+Example list item:
+
+```json
+{
+  "uri": "allino://resource/docs/guide.md",
+  "name": "docs/guide.md",
+  "description": "Local file: docs/guide.md",
+  "mimeType": "text/markdown; charset=utf-8"
+}
+```
+
+`resources/read` returns UTF-8 files as `text`. Non-UTF-8 files are returned as base64 `blob`.
+
 ## Prompts
 
 Prompt functions use their input schema to generate MCP prompt arguments. `prompts/get` calls the function and returns the output as a user prompt message.
