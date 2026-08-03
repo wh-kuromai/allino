@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/casbin/casbin/v2"
 	"github.com/go-playground/validator/v10"
 	"github.com/goccy/go-yaml"
 	"github.com/gofiber/fiber/v2"
@@ -70,6 +71,7 @@ type Config struct {
 	Sqids        SqidsConfig        `json:"sqids"`
 	S3           S3Config           `json:"s3"`
 	AI           AIConfig           `json:"ai"`
+	Casbin       CasbinConfig       `json:"casbin"`
 
 	Debug            bool              `json:"debug"`
 	DisabledCommands []string          `json:"-"`
@@ -108,6 +110,7 @@ type Server struct {
 	Sqids      *Sqids
 	TimeWheel  *timewheel.TimeWheel
 	ChatGPT    *openai.Client
+	Casbin     *casbin.SyncedEnforcer
 
 	nodeip     string
 	extensions []extendable
@@ -284,6 +287,11 @@ func NewServer(config *Config, extconfig ...map[string]any) (*Server, error) {
 	}
 
 	s.S3, err = s.Config.S3.setup(appctx)
+	if err != nil {
+		return nil, err
+	}
+
+	s.Casbin, err = s.Config.Casbin.setup(s)
 	if err != nil {
 		return nil, err
 	}

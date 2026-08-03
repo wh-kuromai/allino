@@ -387,6 +387,11 @@ func (rw *GenericFunction[T, U, E]) Call(r *Runtime, input T) (output U, err err
 
 func (rw *GenericFunction[T, U, E]) call_internal(r *Runtime, input T, fromcall bool) (output U, err error) {
 	//var zeroU U
+	if err := r.enforceACL(rw.options, input); err != nil {
+		var zeroU U
+		return zeroU, err
+	}
+
 	if rw.options.Session.Type != "" {
 		return rw.call_session(r, input, fromcall)
 	}

@@ -67,3 +67,6 @@ ai:
   tool_max_loop: 2
   chatgpt:
     response_api_url: "https://api.openai.com/v1/responses"
+casbin:
+  adapter: csv
+  tenant_claim: tenant

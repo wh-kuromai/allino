@@ -29,6 +29,10 @@ type Option struct {
 	// Session
 	Session SessionOption
 
+	// ACL
+	ACLResource string
+	ACLAction   string
+
 	// Job
 	Cron    string
 	JobMode string

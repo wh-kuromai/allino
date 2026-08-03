@@ -13,9 +13,7 @@ import (
 )
 
 func TestPingHandler(t *testing.T) {
-	if s.Redis == nil {
-		t.Skip("Redis not configured")
-	}
+	requireRedis(t)
 
 	req := httptest.NewRequest("GET", "/test/ping", nil)
 	w, _ := s.Fiber.Test(req, -1)

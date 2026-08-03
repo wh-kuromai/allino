@@ -11,6 +11,8 @@ import (
 )
 
 func TestJobModeFanout(t *testing.T) {
+	requireRedis(t)
+
 	atomic.StoreInt32(&handlers.FanoutExecutionCount, 0)
 
 	//s := allino.NewTestServer(nil)
@@ -35,6 +37,8 @@ func TestJobModeFanout(t *testing.T) {
 }
 
 func TestJobModeReplay(t *testing.T) {
+	requireRedis(t)
+
 	atomic.StoreInt32(&handlers.ReplayExecutionCount, 0)
 
 	//s := allino.NewTestServer(nil)
@@ -58,6 +62,8 @@ func TestJobModeReplay(t *testing.T) {
 }
 
 func TestJobModeReplayAll(t *testing.T) {
+	requireRedis(t)
+
 	atomic.StoreInt32(&handlers.ReplayAllExecutionCount, 0)
 
 	//s := allino.NewTestServer(nil)
