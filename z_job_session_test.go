@@ -12,12 +12,17 @@ import (
 )
 
 func TestSession(t *testing.T) {
+	requireRedis(t)
+
 	id := xid.New().String()
 
 	// ---- 1st request ----
 	req1 := httptest.NewRequest("GET", "/api/stickysessiontest?value=abc"+id, nil)
 
-	resp1, _ := s.Fiber.Test(req1)
+	resp1, err := s.Fiber.Test(req1)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
 	body1, _ := io.ReadAll(resp1.Body)
 
 	if resp1.StatusCode != 200 {

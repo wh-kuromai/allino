@@ -46,10 +46,6 @@ type Option struct {
 	Tools        []Function
 	MCP          string // "tool", "resource", "prompt"
 
-	// Logs
-	AutoAudit    bool
-	AutoAuditMsg string
-
 	// Semantics
 	Package     string // optional: override auto package detection, used for route printing,
 	Name        string // required: job

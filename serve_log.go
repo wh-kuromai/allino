@@ -18,23 +18,8 @@ type LogConfig struct {
 	Silent      bool              `json:"silent"`
 	NoRequestID bool              `json:"norequestid"`
 	Zap         ZapConfig         `json:"zap"`
-	Audit       AuditConfig       `json:"audit"`
 	AccessLog   []LogOutputConfig `json:"accesslog"`
 	ErrorLog    []LogOutputConfig `json:"errorlog"`
-}
-
-type AutoAuditPolicy int32
-
-const (
-	AutoAuditNever AutoAuditPolicy = iota
-	AutoAuditLogin
-	AutoAuditAlways
-)
-
-type AuditConfig struct {
-	AutoAuditPolicy       AutoAuditPolicy `json:"autoaudit_policy,omitempty"`
-	AutoAuditBytesOutput  bool            `json:"autoaudit_bytes_output,omitempty"`
-	AutoAuditStringOutput bool            `json:"autoaudit_string_output,omitempty"`
 }
 
 type ZapConfig struct {
