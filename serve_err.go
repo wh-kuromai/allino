@@ -190,7 +190,7 @@ func (r *Runtime) errorJSON(statusCode int, nowrap bool, eiserror bool, errz err
 	}
 	jerrbuf, err := json.MarshalIndent(err, "", "  ")
 	if err == nil {
-		r.fiber.Write(jerrbuf)
+		_ = r.fiber.Send(jerrbuf)
 		return
 	}
 }

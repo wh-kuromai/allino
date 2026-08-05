@@ -7,7 +7,8 @@
 
 allino turns ordinary Go functions with typed input and output into HTTP APIs,
 OpenAPI definitions, MCP tools/resources/prompts, CLI-visible handlers, cached
-executions, background jobs, and authenticated application endpoints.
+executions, background jobs, Casbin-backed ACL checks, and authenticated
+application endpoints.
 
 The core idea is small:
 
@@ -31,6 +32,7 @@ That single function can be:
 - exposed as an MCP tool, resource, or prompt
 - executed through CLI/job infrastructure by handler name
 - cached, deduplicated, dispatched, replayed, or resumed
+- protected by Casbin ACL rules with tenant-aware authorization
 - given access to shared runtime services such as logging, Redis, SQL, S3, AI
   clients, sessions, authentication, and request IDs
 
@@ -192,11 +194,43 @@ allino includes application plumbing that is easy to forget until you need it:
 
 - login cookies, access tokens, CSRF tokens, guest sessions, and JWT claims
 - `Runtime.User()` with read/write intent checks
+- Casbin ACL enforcement via `Option.ACLResource` and `Option.ACLAction`
+- CSV/file or PostgreSQL Casbin policies with tenant-aware domain matching
 - Redis, SQL, S3, HTTP client, logger, request ID, and context access
 - sticky sessions for stateful or non-serializable runtime objects
 - config loading from YAML/JSON/encrypted files
 - structured logging, access logs, rotation, and cron-based rotation
 - extension hooks for startup, shutdown, authz, injection, SQL schema, and CLI
+
+Casbin is enabled by setting `casbin.model` in config. Policies can be loaded
+from a CSV file or PostgreSQL adapter. For handler-level ACL checks, set
+`ACLResource` and optionally `ACLAction`; resource/action templates can use
+input values tagged with `acl:"name"`.
+
+```go
+type BookInput struct {
+	BookID string `path:"book_id" acl:"book"`
+}
+
+var ReadBook = allino.NewFunction(
+	allino.Option{
+		Path:        "/books/:book_id",
+		Method:      "GET",
+		ContentType: allino.JSON,
+		ACLResource: "books/{book}",
+		ACLAction:   "read",
+	},
+	func(r *allino.Runtime, input BookInput) (map[string]string, error) {
+		return map[string]string{"book": input.BookID}, nil
+	},
+)
+```
+
+At request time, allino reads the authenticated user with `Runtime.User()`, reads
+the tenant from the configured JWT claim (`tenant` by default), expands ACL
+templates from input fields, and calls Casbin as `(tenant, uid, resource,
+action)`. `Runtime.Enforcer()` is available when a handler needs direct access
+to the underlying `*casbin.SyncedEnforcer`.
 
 See [CONFIG](./docs/CONFIG.md), [EXTENSION](./docs/EXTENSION.md), and
 [TEST](./docs/TEST.md) for the detailed behavior.
@@ -235,7 +269,8 @@ You can paste the following after your API idea, and get working `allino` code i
 ```go
 // allino typed function runtime for Go backends
 //   allino turns typed Go functions into HTTP APIs, OpenAPI definitions, MCP tools/resources/prompts,
-//   CLI-visible handlers, cached executions, background jobs, and authenticated application endpoints.
+//   CLI-visible handlers, cached executions, background jobs, Casbin-backed ACL checks,
+//   and authenticated application endpoints.
 //   The core design is input struct -> function -> output struct.
 //   It uses Go generics and reflection metadata so validation, schema generation, job input/output,
 //   MCP schemas, and tests can share the same function definition.
@@ -278,6 +313,7 @@ func (r *Runtime) Redis() redis.UniversalClient // go-redis Client, inited via c
 func (r *Runtime) SQL() *sql.DB // pre-Opened sql Client, inited via config.
 func (r *Runtime) S3() *s3.Client // AWS SDK v2 S3 client, inited via config. (MinIO/AWS)
 func (r *Runtime) HttpClient() *http.Client // inited shared http client.
+func (r *Runtime) Enforcer() *casbin.SyncedEnforcer // Casbin enforcer, nil when config.casbin.model is not set.
 // User() checks and validates using Cookie, Authorization header, X-CSRF-Token header or `csrf_token` form data.
 // Returns uid (database key), display name, and sets writable=true only when a write-intent credential is presented
 // (e.g., Authorization header or an explicit token in form/query/header) and CSRF validation succeeds.
@@ -324,6 +360,12 @@ type Option struct {
 	HTMLTemplate       string // html/template text
 	OnInit     func(s *Server, virtual *Runtime) error // Init code for this handler, use Request for DB or Logger.
 	OnShutdown func(s *Server, virtual *Runtime) error // Finalize code for this handler, use Request for DB or Logger.
+
+  // ACLResource enables Casbin authorization for this handler.
+  // ACLResource and ACLAction may contain `{name}` or `:name` placeholders populated from input fields tagged `acl:"name"`.
+  // At runtime, allino calls Casbin Enforce(tenant, uid, resource, action), where tenant comes from config.casbin.tenant_claim (`tenant` by default).
+  ACLResource string
+  ACLAction string // optional. Defaults to "access".
 
   Name    string // Logical name of this handler. Required when using Job mode.
   Version string // Semantic version of the handler (e.g. "1.0.0"). Optional.

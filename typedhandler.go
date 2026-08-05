@@ -163,10 +163,6 @@ func NewFunction[T, U any, E error](option Option, handlefunc func(r *Runtime, i
 		}
 	}
 
-	var contentTypeHandlerThis = contentTypeHandlerMap[options.ContentType]
-	//var contentTypeHandlerJSON = contentTypeHandlerMap[JSON]
-	var contentTypeHandlerHTML = contentTypeHandlerMap[HTML]
-
 	var rw *GenericFunction[T, U, E]
 	rw = &GenericFunction[T, U, E]{
 		options: options,
@@ -242,13 +238,13 @@ func NewFunction[T, U any, E error](option Option, handlefunc func(r *Runtime, i
 					}
 				}
 
-				h := contentTypeHandlerThis //Map[options.ContentType]
+				h := contentTypeHandlerMap[options.ContentType]
 				if h != nil {
 					h.ErrorHandler(r, options, err)
 					return
 				}
 
-				h = contentTypeHandlerHTML //Map[HTML]
+				h = contentTypeHandlerMap[HTML]
 				if h != nil {
 					h.ErrorHandler(r, options, err)
 					return
@@ -272,13 +268,13 @@ func NewFunction[T, U any, E error](option Option, handlefunc func(r *Runtime, i
 				}
 			}
 
-			h := contentTypeHandlerThis //Map[options.ContentType]
+			h := contentTypeHandlerMap[options.ContentType]
 			if h != nil {
 				h.ResponseHandler(r, options, resp)
 				return
 			}
 
-			h = contentTypeHandlerHTML //Map[HTML]
+			h = contentTypeHandlerMap[HTML]
 			if h != nil {
 				h.ResponseHandler(r, options, resp)
 				return
@@ -520,7 +516,7 @@ func init() {
 			}
 
 			r.fiber.Status(options.ResponseStatusCode)
-			r.fiber.Write(buf)
+			_ = r.fiber.Send(buf)
 		},
 		errorHandler: func(r *Runtime, options *Option, err error) {
 			if redir, ok := err.(FiberHandler); ok {

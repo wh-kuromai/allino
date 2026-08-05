@@ -134,3 +134,15 @@ func (r *Server) RegisteredFunctions() []*Option {
 
 	return ho
 }
+
+func (r *Server) RegisteredInternalFunctionHandlers() []Function {
+	handlers := make([]Function, len(r.internalHandlerCache))
+	copy(handlers, r.internalHandlerCache)
+	return handlers
+}
+
+func (r *Server) RegisteredFiberOptions() []*Option {
+	options := make([]*Option, len(r.optionsCache))
+	copy(options, r.optionsCache)
+	return options
+}

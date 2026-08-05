@@ -856,7 +856,7 @@ func (c *callSQLStrategy) Total(ctx context.Context, jobid ...string) (map[strin
 	var rows *sql.Rows
 	var err error
 	if len(jobid) == 0 {
-		query := `SELECT status, count FROM execution_counts WHERE rootid IS NULL;`
+		query := `SELECT status, count FROM execution_counts WHERE rootid = '*';`
 		rows, err = c.db.QueryContext(ctx, query)
 		if err != nil {
 			return nil, err
